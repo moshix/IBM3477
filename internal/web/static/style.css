@@ -1,0 +1,149 @@
+/* webtwinax: IBM InfoWindow terminal in the browser */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #111; color: #3c3; height: 100vh;
+  display: flex; flex-direction: column;
+  font: 13px 'IBM Plex Mono', 'Courier New', monospace;
+}
+/* The toolbar is about 25% smaller than the page text (13px -> 10px,
+   padding and gaps alike), so it fits one row in a MacBook browser. */
+#toolbar {
+  display: flex; align-items: center; gap: 6px; padding: 4px 9px;
+  background: #2a2a2a; border-bottom: 1px solid #444; flex-wrap: wrap;
+  font-size: 10px;
+}
+#toolbar label { color: #aaa; }
+#toolbar input, #toolbar select, #toolbar button {
+  background: #333; color: #eee; border: 1px solid #555;
+  padding: 2px 6px; font: inherit;
+}
+#toolbar button { cursor: pointer; }
+#toolbar button:hover { background: #444; }
+.sep { width: 1px; height: 15px; background: #555; margin: 0 3px; }
+/* min-height: 0 lets the screen area shrink inside the flex column, so
+   the canvas can never push the status bar below the window. */
+#screen-wrap {
+  flex: 1; min-height: 0; display: flex; align-items: center;
+  justify-content: center; overflow: hidden; padding: 8px;
+}
+#toolbar, #statusbar { flex-shrink: 0; }
+/* The canvas keeps the terminal's native pixels; terminal.js sets its
+   CSS size to the largest that fits #screen-wrap (aspect ratio kept). */
+#screen {
+  image-rendering: pixelated;
+  background: #000; outline: none;
+  display: block;
+}
+/* The version, in subdued gray at the top right corner of the page
+   (the right end of the toolbar), outside the terminal screen. */
+#version-label {
+  margin-left: auto; color: #666; font: 9px monospace;
+}
+#statusbar {
+  display: flex; justify-content: space-between; padding: 3px 12px;
+  background: #222; border-top: 1px solid #444; color: #aaa;
+}
+
+/* Power switch: green when the terminal is off (press to switch on),
+   red when it is running (press to switch off). */
+#toolbar #btn-power { font-weight: bold; padding: 2px 9px; }
+#toolbar #btn-power.power-off { background: #1d6b2e; border-color: #3c3; color: #fff; }
+#toolbar #btn-power.power-off:hover { background: #24863a; }
+#toolbar #btn-power.power-on { background: #6b1d1d; border-color: #c33; color: #fff; }
+#toolbar #btn-power.power-on:hover { background: #862424; }
+
+/* Settings / keyboard mapping modal (styling from web5250), about 15%
+   smaller than web5250's, with the key mappings in two columns so more
+   of them fit on the screen. */
+#modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7); z-index: 100;
+  justify-content: center; align-items: center;
+}
+#modal-overlay.visible { display: flex; }
+#keymap-modal {
+  background: #2a2a2a; border: 1px solid #4ec9b0; border-radius: 6px;
+  padding: 17px; max-width: 820px; width: 94%; max-height: 90vh;
+  overflow-y: auto; color: #ccc;
+}
+#keymap-modal .modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 10px;
+}
+#keymap-modal h2 { color: #4ec9b0; font-size: 14px; }
+#keymap-modal h3 { color: #4ec9b0; font-size: 11px; margin-bottom: 3px; }
+#keymap-modal .modal-close {
+  background: none; border: 1px solid #555; color: #f44747;
+  font-size: 19px; width: 27px; height: 27px; border-radius: 4px;
+  cursor: pointer;
+}
+#keymap-modal .modal-close:hover { background: #f44747; color: #fff; }
+.settings-hint { color: #888; font-size: 9.5px; margin-bottom: 7px; }
+#keymap-list {
+  display: grid; grid-template-columns: 1fr 1fr; column-gap: 20px;
+}
+#keymap-modal .keymap-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 3px 0; border-bottom: 1px solid #333;
+}
+#keymap-modal .keymap-fn {
+  display: flex; flex-direction: column; color: #dcdcaa; font-size: 11px;
+  margin-right: 7px;
+}
+#keymap-modal .keymap-fn-desc { color: #888; font-size: 8.5px; margin-top: 1px; }
+#keymap-modal .keymap-key {
+  background: #333; border: 1px solid #555; padding: 2px 7px;
+  border-radius: 3px; font-size: 10px; cursor: pointer; color: #eee;
+  min-width: 94px; text-align: center;
+}
+#keymap-modal .keymap-key:hover { border-color: #4ec9b0; }
+#keymap-modal .keymap-key.listening { border-color: #f44747; color: #f44747; }
+#keymap-modal .keymap-cancel {
+  background: transparent; color: #888; border: 1px solid #555;
+  border-radius: 3px; padding: 2px 7px; font-size: 8.5px; cursor: pointer;
+  margin-right: 3px;
+}
+#keymap-modal .modal-buttons {
+  margin-top: 14px; display: flex; gap: 7px; justify-content: flex-end;
+}
+#keymap-modal .modal-buttons button {
+  background: #555; color: #ccc; border: none; padding: 5px 14px;
+  border-radius: 3px; cursor: pointer; font-size: 10px;
+}
+#keymap-modal .modal-buttons button.primary {
+  background: #4ec9b0; color: #1a1a1a; font-weight: bold;
+}
+
+/* Connect button, as in web5250: teal, and red while connected (the same
+   button then disconnects). */
+#toolbar #btn-connect {
+  background: #4ec9b0; color: #1a1a1a; border: none; padding: 3px 9px;
+  font-weight: bold; border-radius: 3px;
+}
+#toolbar #btn-connect:hover { background: #5fd9c0; }
+#toolbar #btn-connect.disconnect { background: #f44747; color: #fff; }
+#toolbar #btn-connect.disconnect:hover { background: #ff5555; }
+
+#keymap-modal .settings-section { margin-bottom: 10px; }
+/* several settings side by side on one row, wrapping when narrow */
+#keymap-modal .settings-row {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 18px;
+  margin-bottom: 4px;
+}
+#keymap-modal .settings-item { display: flex; align-items: center; gap: 6px; }
+#keymap-modal .settings-item .settings-hint { margin-bottom: 0; }
+#keymap-modal .settings-row label { color: #ccc; font-size: 10px; }
+#keymap-modal .settings-row select {
+  background: #333; color: #eee; border: 1px solid #555; padding: 2px 5px;
+  font-size: 10px;
+}
+
+/* Clickable SETUP in the status bar: presses the terminal's Setup key. */
+#setup-link {
+  color: #4ec9b0; font-weight: bold; text-decoration: none;
+  margin-right: 16px; cursor: pointer;
+}
+#setup-link:hover { text-decoration: underline; }
+#statusbar #status-text { flex: 1; }
+
+#status-traffic { margin-right: 24px; color: #aaa; }

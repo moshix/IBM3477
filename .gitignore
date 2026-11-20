@@ -1,0 +1,34 @@
+# --- IBM firmware ---------------------------------------------------------
+# The ROM dumps and everything derived from them (images, listings) are IBM
+# copyrighted firmware.  They are kept out of the repository by default;
+# the emulator loads them at runtime from -romdir.  Delete these lines if
+# you deliberately want to version them.
+*.bin
+*.rom
+*.listing
+
+# --- Go build output ------------------------------------------------------
+/webtwinax
+/webtwinax.exe
+/bin/
+*.test
+*.out
+
+# --- Test data downloaded on demand ---------------------------------------
+# SingleStepTests 8088 CPU suite (large, fetched by the CPU tests' setup)
+/internal/cpu/testdata/8088/
+
+# --- Emulator runtime state -----------------------------------------------
+*.nvram
+
+# --- Python tooling -------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- Editors / OS ---------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp

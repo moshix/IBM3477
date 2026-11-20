@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IBM InfoWindow twinax terminal</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="toolbar">
+  <label>Terminal:</label>
+  <select id="model-select">
+    <option value="3477">IBM 3477</option>
+    <option value="3486">IBM 3486</option>
+  </select>
+  <button id="btn-power" class="power-off" title="Switch the terminal on or off">&#x23FB; Power on</button>
+  <div class="sep"></div>
+  <label>Host:</label>
+  <input type="text" id="host-input" placeholder="hostname or IP">
+  <label>Port:</label>
+  <input type="text" id="port-input" size="5">
+  <label>Screen size:</label>
+  <select id="size-select" title="Terminal type announced to the host"></select>
+  <button id="btn-connect">Connect</button>
+  <div class="sep"></div>
+  <button id="btn-settings">Settings</button>
+  <span id="version-label"></span>
+</div>
+<div id="screen-wrap">
+  <canvas id="screen" tabindex="0"></canvas>
+</div>
+<div id="statusbar">
+  <a id="setup-link" href="#" style="display:none" title="Open the terminal's Setup (presses its Setup key)">SETUP</a>
+  <span id="status-text">Powered off</span>
+  <span id="status-traffic" title="Bytes sent to / received from the host"></span>
+  <span id="status-led"></span>
+</div>
+<div id="modal-overlay">
+  <div id="keymap-modal">
+    <div class="modal-header">
+      <h2>Settings</h2>
+      <button class="modal-close" id="btn-settings-close">&times;</button>
+    </div>
+    <div class="settings-section">
+      <h3>Display, sound and host</h3>
+      <div class="settings-row">
+        <span class="settings-item">
+          <label for="color-select">Text colour:</label>
+          <select id="color-select">
+            <option value="green" selected>IBM Green</option>
+            <option value="amber">Amber</option>
+            <option value="white">White</option>
+          </select>
+        </span>
+        <span class="settings-item">
+          <label for="sound-select">Sound:</label>
+          <select id="sound-select">
+            <option value="on" selected>On (alarm and key click)</option>
+            <option value="off">Off</option>
+          </select>
+        </span>
+        <span class="settings-item">
+          <label for="click-style">Keyboard click:</label>
+          <select id="click-style">
+            <option value="synthetic" selected>Synthetic</option>
+            <option value="realistic">Realistic (recorded IBM 3477)</option>
+          </select>
+        </span>
+        <span class="settings-item">
+          <input type="checkbox" id="mute-click">
+          <label for="mute-click">Mute keyboard click</label>
+        </span>
+      </div>
+      <div class="settings-row">
+        <span class="settings-item">
+          <label for="codepage-select">Codepage:</label>
+          <select id="codepage-select">
+            <option value="37" selected>37 (US/Canada)</option>
+            <option value="500">500 (International)</option>
+            <option value="273">273 (German)</option>
+            <option value="277">277 (Danish/Norwegian)</option>
+            <option value="278">278 (Swedish/Finnish)</option>
+            <option value="280">280 (Italian)</option>
+            <option value="284">284 (Spanish)</option>
+            <option value="285">285 (UK)</option>
+            <option value="297">297 (French)</option>
+            <option value="870">870 (Latin-2)</option>
+            <option value="871">871 (Icelandic)</option>
+          </select>
+          <span class="settings-hint">(next connect)</span>
+        </span>
+      </div>
+    </div>
+    <div class="settings-section">
+      <h3>Keyboard Mapping</h3>
+      <p class="settings-hint">Click a key, then press the PC key (with
+      Ctrl/Shift/Alt if wanted) that should act as that key of the
+      terminal's IBM 122-key keyboard. Unmapped keys type as the key in
+      the same position.</p>
+    </div>
+    <div id="keymap-list"></div>
+    <div class="modal-buttons">
+      <button id="btn-keymap-reset">Reset Defaults</button>
+      <button class="primary" id="btn-settings-done">Close</button>
+    </div>
+  </div>
+</div>
+<script src="/static/terminal.js"></script>
+</body>
+</html>

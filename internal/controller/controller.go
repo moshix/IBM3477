@@ -53,6 +53,38 @@ const (
 	stException = 0x0E // exception status field; 0x0E = 7 = power on
 )
 
+// Exception handling. The station reports an exception in poll status
+// bits 1-3 (C000:7052 stores the status value): 0x0E = power on; the
+// firmware also raises 0x02, 0x04, 0x08 (e.g. an invalid command or Set
+// Mode value, or its 16-byte command buffer overrun, C000:731C), 0x0A
+// (line error) and 0x0C (e.g. an address beyond its screen). While
+// an exception is pending the firmware drops every command except Write
+// Control Data with reset-exception (C000:935A-9374), so each one must be
+// reset, after which the screen is repainted. If exceptions keep coming
+// back right after a recovery, the next recovery waits longer (doubling,
+// up to maxRecoverDelay polls), so a station that rejects what the
+// controller sends cannot keep it in a tight reset/repaint loop.
+const maxRecoverDelay = 2048
+
+// lostPolls is how many polls in a row the station may miss before the
+// controller searches the station addresses again (about 0.5 s): the
+// user may have changed the terminal's address in its Setup.
+const lostPolls = 500
+
+// Screen size. Write Control Data with bit 0x40 in its control byte
+// carries a second byte (C000:9346-9357, kept at [0x1209]); bit 0x08 of
+// that byte selects 27x132, clear selects 24x80 (C000:94A4-954A sets the
+// session's rows [0x1275] = 1B/18, columns [0x1277] = 84/50 and buffer
+// sizes [0x1270]/[0x1272], then the display switches to the 27x132 or
+// 24x80 video mode, C000:3511). After power-on the byte is 0: 24x80.
+// The other bits of the second byte (cursor and buffer options) are left
+// 0, as at power-on. Sending 132-column addresses to a station in 24x80
+// mode raises exception 6 instead.
+const (
+	wcdSecondByte = 0x40
+	wcd2Wide      = 0x08
+)
+
 // Write Control Data control byte bits.
 const (
 	wcdResetException = 0x04
@@ -110,10 +142,12 @@ type Controller struct {
 	rows, cols   int
 	cursor       int
 	initializing bool
-	shift        bool // Shift held (twinax 57/56 make .. D7/D6 break)
-	caps         bool // Caps Lock on (toggled by twinax 54)
-	cmd          bool // the Cmd prefix (6F) of a PF key was received
-	painted      bool // the first full repaint of the host screen is done
+	// Shift held (twinax 57/56 make .. D7/D6 break), per key: releasing
+	// one of two held Shift keys leaves Shift down
+	shiftL, shiftR bool
+	caps           bool // Caps Lock on (toggled by twinax 54)
+	cmd            bool // the Cmd prefix (6F) of a PF key was received
+	painted        bool // the first full repaint of the host screen is done
 	// indicators is the last indicator byte sent with 0x51 (-1 = unknown,
 	// send it on the next sync).
 	indicators int
@@ -121,6 +155,13 @@ type Controller struct {
 	wcdIndicators int
 	// alarms is the host's alarm count already sounded (-1 = not yet read)
 	alarms int
+
+	// recoverDelay: polls to wait before the next exception recovery
+	// (holdoff counts them down); doubled when an exception comes back
+	// before a clean repaint, reset once the screen is painted cleanly.
+	recoverDelay, holdoff int
+	// missed counts polls in a row the station did not answer
+	missed int
 
 	// Online reports whether the station answered the last poll.
 	Online bool
@@ -159,27 +200,61 @@ func (c *Controller) poll() {
 	r, ok := c.st.Deliver(c.addr, cmdPoll, nil)
 	if !ok || !r.Polled {
 		c.Online = false
+		c.missed++
+		if !c.scan && c.missed >= lostPolls {
+			// gone for a while: its address may have changed in the
+			// terminal's Setup, so search again
+			c.scan = true
+		}
 		if c.scan {
 			c.addr = (c.addr + 1) % 7
 		}
 		return
 	}
 	c.Online = true
-	c.scan = false
+	c.missed = 0
+	if c.scan {
+		c.scan = false
+		// (re)discovered: what it displays is unknown
+		c.invalidate()
+	}
 	c.st.Deliver(c.addr, cmdAck, nil)
 
-	if r.Status&stException == stException {
-		if !c.initializing {
-			c.startInit()
-		}
-	} else {
+	waiting := false
+	// idle: everything queued was sent and the station has processed it
+	idle := r.Status&stBusy == 0 && len(c.queues) == 0
+	switch exc := r.Status & stException; {
+	case exc == 0:
 		c.initializing = false
+	case c.initializing && !idle:
+		// recovery queued or still being processed: wait for it
+	case exc == stException:
+		// power on, or powered on again while a recovery was under way
+		// (the exception is still there with nothing left to process):
+		// bring the station up from the start
+		c.startInit()
+	case c.holdoff > 0:
+		// recurring exception: wait before resetting it again; the
+		// station would drop anything else sent meanwhile
+		c.holdoff--
+		waiting = true
+	default:
+		c.recoverException()
 	}
 	if r.Scan != 0 && c.host != nil {
 		c.key(r.Scan)
 	}
+	if waiting {
+		return
+	}
 	if len(c.queues) == 0 && c.shadow != nil {
 		c.painted = true // the host screen is on the station
+		// a clean repaint only once the station has processed it all
+		// (not busy) without raising an exception: a station still busy
+		// with the last queue may report its exception on a later poll
+		if r.Status&(stException|stBusy) == 0 {
+			c.recoverDelay = 0
+		}
 	}
 	if r.Status&stBusy != 0 {
 		return
@@ -205,10 +280,44 @@ func (c *Controller) startInit() {
 		{{cmdSetMode, []uint8{0}}, {cmdEOQ, nil}},
 		{{cmdWCD, []uint8{wcdResetException}}, {cmdEOQ, nil}},
 	}
+	c.invalidate()
+}
+
+// recoverException resets any other exception (Write Control Data with
+// reset-exception) and repaints everything, as commands sent while it
+// was pending were dropped. Pending queues are discarded: they assumed a
+// screen the station may not show.
+func (c *Controller) recoverException() {
+	c.initializing = true
+	c.queues = [][]message{{{cmdWCD, []uint8{wcdResetException}}, {cmdEOQ, nil}}}
+	c.invalidate()
+	// if the exception comes back before a clean repaint, wait longer
+	// before the next recovery
+	c.holdoff = c.recoverDelay
+	switch {
+	case c.recoverDelay == 0:
+		c.recoverDelay = 1
+	case c.recoverDelay < maxRecoverDelay:
+		c.recoverDelay *= 2
+	}
+}
+
+// invalidate forgets what the station shows: the next sync sets its
+// screen size, clears it and repaints, and resends the indicators.
+func (c *Controller) invalidate() {
 	c.shadow = nil
 	c.cursor = -1
 	c.indicators = -1
 	c.wcdIndicators = -1
+}
+
+// screenSizeByte is the second Write Control Data byte for a host screen
+// of cols columns (see wcd2Wide).
+func screenSizeByte(cols int) uint8 {
+	if cols > 80 {
+		return wcd2Wide
+	}
+	return 0
 }
 
 // addr2 encodes a screen position as the station's 2-byte address
@@ -225,12 +334,17 @@ func (c *Controller) sync() {
 	n := s.Rows * s.Cols
 	want := stationImage(s)
 	if c.shadow == nil || s.Rows != c.rows || s.Cols != c.cols {
-		// unknown or resized: clear the station screen, then repaint
+		// unknown or resized: put the station in the host screen's
+		// size (24x80 or 27x132), clear its screen, then repaint
 		c.rows, c.cols = s.Rows, s.Cols
 		c.shadow = make([]byte, n)
-		c.queues = append(c.queues, []message{
-			{cmdLAC, addr2(0)}, {cmdLRC, addr2(n - 1)}, {cmdClear, nil}, {cmdEOQ, nil},
-		})
+		// the status row moves with the screen size: send the
+		// indicators again
+		c.indicators, c.wcdIndicators = -1, -1
+		c.queues = append(c.queues,
+			[]message{{cmdWCD, []uint8{wcdResetException | wcdSecondByte, screenSizeByte(s.Cols)}}, {cmdEOQ, nil}},
+			[]message{{cmdLAC, addr2(0)}, {cmdLRC, addr2(n - 1)}, {cmdClear, nil}, {cmdEOQ, nil}},
+		)
 		c.cursor = -1
 	}
 	wrote := false
@@ -390,8 +504,11 @@ func (c *Controller) key(scan uint8) {
 	release := scan&kbdlayout.TwinaxRelease != 0
 	code := scan &^ kbdlayout.TwinaxRelease
 	switch code {
-	case kbdlayout.TwinaxShiftLeft, kbdlayout.TwinaxShiftRight:
-		c.shift = !release
+	case kbdlayout.TwinaxShiftLeft:
+		c.shiftL = !release
+		return
+	case kbdlayout.TwinaxShiftRight:
+		c.shiftR = !release
 		return
 	case kbdlayout.TwinaxCapsLock:
 		if !release {
@@ -416,14 +533,14 @@ func (c *Controller) key(scan uint8) {
 	if c.cmd {
 		c.cmd = false
 		if n := int(code) - kbdlayout.TwinaxPFBase; n >= 1 && n <= 12 {
-			if c.shift {
+			if c.shifted() {
 				n += 12
 			}
 			c.host.Key(fmt.Sprintf("PF%d", n))
 		}
 		return
 	}
-	fn, ch, ok := kbdlayout.DecodeTwinax(code, c.shift)
+	fn, ch, ok := kbdlayout.DecodeTwinax(code, c.shifted())
 	switch {
 	case !ok:
 	case fn != "":
@@ -436,3 +553,6 @@ func (c *Controller) key(scan uint8) {
 		c.host.TypeChar(ch)
 	}
 }
+
+// shifted reports whether either Shift key is held.
+func (c *Controller) shifted() bool { return c.shiftL || c.shiftR }

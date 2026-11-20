@@ -220,3 +220,19 @@ func TestI2CEEPROM(t *testing.T) {
 		t.Errorf("SaveEEPROM()[1B] = %02X", got)
 	}
 }
+
+// TestNVRAMRejectsWrongSize: a short (partly written) or oversized image
+// is rejected and leaves the setup memory untouched.
+func TestNVRAMRejectsWrongSize(t *testing.T) {
+	b := boot3477(t)
+	before := b.SaveNVRAM()
+	for _, n := range []int{0, 0x10, 0x8FF, 0x901} {
+		img := bytes.Repeat([]byte{0xA5}, n)
+		if err := b.LoadNVRAM(img); err == nil {
+			t.Fatalf("%d-byte image accepted", n)
+		}
+		if !bytes.Equal(b.SaveNVRAM(), before) {
+			t.Fatalf("%d-byte image changed the setup memory", n)
+		}
+	}
+}

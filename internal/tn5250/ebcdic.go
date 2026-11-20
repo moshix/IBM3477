@@ -75,16 +75,19 @@ func newCharMap(name string) *charMap {
 
 // newBracketMap builds the CP037 "bracket" variant. Hosts using the bracket
 // code page place '[' at EBCDIC 0x4A and ']' at 0x5A (where plain CP037 keeps
-// cent-sign / exclamation). We start from CP037 and remap just those points so
-// brackets round-trip while everything else stays identical.
+// cent-sign / exclamation). We start from CP037 and swap the two pairs: '[' /
+// ']' move to 0x4A / 0x5A, and '¢' / '!' move to the code points plain CP037
+// uses for the brackets (0xBA / 0xBB). A pure swap keeps the map a bijection,
+// so every byte still round-trips and no two characters share a code point.
 func newBracketMap() *charMap {
 	m := &charMap{name: "37-bracket", toRemote: cp037ToRemote, toLocal: cp037ToLocal}
-	// EBCDIC 0x4A -> '[', 0x5A -> ']' on the way to local.
-	m.toLocal[0x4A] = '['
-	m.toLocal[0x5A] = ']'
-	// And the reverse direction so a typed bracket goes back to 0x4A / 0x5A.
-	m.toRemote['['] = 0x4A
-	m.toRemote[']'] = 0x5A
+	swap := func(a, b byte) { // exchange the characters at EBCDIC a and b
+		la, lb := m.toLocal[a], m.toLocal[b]
+		m.toLocal[a], m.toLocal[b] = lb, la
+		m.toRemote[la], m.toRemote[lb] = b, a
+	}
+	swap(0x4A, 0xBA) // '¢' <-> '['
+	swap(0x5A, 0xBB) // '!' <-> ']'
 	return m
 }
 

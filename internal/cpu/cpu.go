@@ -2,8 +2,10 @@
 // run the IBM InfoWindow terminal firmware unmodified.
 //
 // The model is instruction-level (not cycle-exact): each Step executes one
-// complete instruction, including all iterations of a REP string
-// instruction. Behaviour is checked against the hardware-captured
+// instruction. A REP string instruction is interruptible as on real
+// hardware: Step stops it between iterations when an interrupt is pending
+// or a cycle budget is used up, leaving CX/SI/DI updated and IP on its
+// first prefix byte so the next Step resumes it. Behaviour is checked against the hardware-captured
 // SingleStepTests 8088 suite, including the 8088's undocumented opcode
 // aliases (60-6F, C0/C1, C8/C9, D6 SALC, shift /6 SETMO, 0F POP CS, ...).
 package cpu
@@ -82,12 +84,26 @@ type CPU struct {
 	nmi bool
 
 	// Per-instruction decode state
-	segOver int   // segment override (-1 = none)
-	rep     uint8 // 0, 0xF2 (REPNE) or 0xF3 (REP/REPE)
-	// noIntr suppresses interrupt recognition before the next
-	// instruction (after MOV/POP to SS and after STI semantics are not
-	// modelled; the 8088 only inhibits after segment-register loads).
+	segOver   int    // segment override (-1 = none)
+	rep       uint8  // 0, 0xF2 (REPNE) or 0xF3 (REP/REPE)
+	instStart uint16 // IP of the instruction's first prefix byte
+	// inPrefix is set when execute stopped inside a long run of prefix
+	// bytes (see maxPrefixes); the next execute continues decoding with
+	// segOver/rep/instStart kept, and no interrupt is taken in between.
+	inPrefix bool
+	// stepping is set while Step runs execute: only then may a REP
+	// string instruction stop early (see stringOp). Direct callers of
+	// execute (the SingleStepTests harness) see whole REP instructions.
+	stepping  bool
+	stepStart uint64 // Cycles at the start of the current Step
+
+	// noIntr holds off every interrupt (NMI, INTR, single-step trap)
+	// until after the next instruction; set by MOV/POP to a segment
+	// register, as on the 8086/8088.
 	noIntr bool
+	// stiShadow holds off INTR and the single-step trap until after the
+	// instruction following STI; NMI is not affected.
+	stiShadow bool
 
 	// Decoded ModRM operand
 	mod, reg, rm uint8
@@ -111,6 +127,8 @@ func (c *CPU) Reset() {
 	c.Halted = false
 	c.nmi = false
 	c.noIntr = false
+	c.stiShadow = false
+	c.inPrefix = false
 }
 
 // NMI latches a non-maskable interrupt request (edge triggered).
@@ -286,7 +304,9 @@ func (c *CPU) setRm16(v uint16) {
 
 // interrupt performs the 8088 interrupt sequence: push FLAGS, CS, IP,
 // clear IF and TF, and load CS:IP from the vector table at 0000:vec*4.
+// Taking any interrupt ends a HLT (the pushed IP is past the HLT).
 func (c *CPU) interrupt(vec uint8) {
+	c.Halted = false
 	c.push(c.Flags)
 	c.Flags &^= FlagIF | FlagTF
 	c.push(c.S[CS])
@@ -301,28 +321,41 @@ func (c *CPU) read16Abs(a uint32) uint16 {
 	return uint16(c.Bus.Read8(a)) | uint16(c.Bus.Read8(a+1&0xFFFFF))<<8
 }
 
+// intrPending reports whether an interrupt would be recognised at the next
+// instruction boundary: NMI, INTR with IF set, or the single-step trap.
+// It is checked between iterations of a REP string instruction, where the
+// segment-load and STI shadows no longer apply.
+func (c *CPU) intrPending() bool {
+	return c.nmi || c.Flags&FlagTF != 0 ||
+		c.Flags&FlagIF != 0 && c.Intr != nil && c.Intr.INTR()
+}
+
 // Step executes one instruction (or services one pending interrupt, or
-// idles one bus cycle while halted) and returns the cycles it took.
+// idles one bus cycle while halted) and returns the cycles it took. A REP
+// string instruction may span several Steps (see stringOp), as may a run
+// of more than maxPrefixes prefix bytes.
 func (c *CPU) Step() int {
 	start := c.Cycles
+	shadow := c.noIntr || c.inPrefix
 	switch {
-	case c.nmi:
+	case c.nmi && !shadow:
 		c.nmi = false
-		c.Halted = false
 		c.interrupt(2)
-	case !c.noIntr && c.Flags&FlagIF != 0 && c.Intr != nil && c.Intr.INTR():
-		c.Halted = false
+	case !shadow && !c.stiShadow && c.Flags&FlagIF != 0 && c.Intr != nil && c.Intr.INTR():
 		c.interrupt(c.Intr.Ack())
 	}
 	c.noIntr = false
+	c.stiShadow = false
 	if c.Halted {
 		c.Cycles += 4
 		return int(c.Cycles - start)
 	}
 	trap := c.Flags&FlagTF != 0
+	c.stepping, c.stepStart = true, start
 	c.execute()
+	c.stepping = false
 	// Single-step trap after an instruction that started with TF set
-	if trap && c.Flags&FlagTF != 0 && !c.noIntr {
+	if trap && c.Flags&FlagTF != 0 && !c.noIntr && !c.stiShadow && !c.inPrefix {
 		c.interrupt(1)
 	}
 	return int(c.Cycles - start)

@@ -332,7 +332,7 @@ The high 3 bits are modifiers that each handler checks: 0x60 = EOQ form,
 | 02 | Reset / **EOQ (0x62)** | 8D75 | 8D75 |
 | 03 | Insert Character | 9DEB | 7C22 |
 | 04 | Search Next Attribute | 9F88 | 8EE0 |
-| 05 | Write Control Data | 932F | 932F |
+| 05 | Write Control Data (control byte → `[0x1207]`; bit 0x40: a second byte follows → `[0x1209]`, whose bit 0x08 selects 27x132, clear 24x80, C000:94A4-954A; see below) | 932F | 932F |
 | 06 | Move Data | 9F65 | 8228 |
 | 07 | Load Reference Counter | 7ECF | 7ECF |
 | 08 | Read Data | 9901 | 8361 |
@@ -469,10 +469,20 @@ and the emulated station:
 - **Polling:** it polls about every 1 ms of emulated time and acknowledges
   every response (`Poll 0x10`, then `Ack 0x30`).
 - **Finding the station:** with no address configured it polls addresses
-  0–6 in turn until one answers.
+  0–6 in turn until one answers. After 500 missed polls in a row (the
+  address may have been changed in Setup) it searches again and repaints.
 - **Bring-up:** on exception 7 (power on) it sends `[13 00][62]` (Set
   Mode, zero fill) and `[05 04][62]` (Write Control Data, reset
-  exception). Then it clears the whole screen: `[15 0000][07 last][12][62]`.
+  exception). Before every full repaint it sets the screen size with
+  `[05 44 08][62]` (27x132) or `[05 44 00][62]` (24x80), then clears the
+  whole screen: `[15 0000][07 last][12][62]`. Without the size command a
+  132-column address sent to a station in 24x80 mode raises exception 6
+  (status 0x0C).
+- **Other exceptions** (status 0x02-0x0C): while one is pending the
+  firmware drops every command except Write Control Data with
+  reset-exception (C000:935A-9374). The controller sends `[05 04][62]`
+  and repaints; if the exception keeps coming back before a clean
+  repaint, it waits 1, 2, 4, … 2048 polls before the next reset.
 - **Screen mirror:** the host's presentation space (EBCDIC plus inline
   attribute bytes 0x20–0x3F) is diffed against what the station already
   shows. Changed runs go out as `[15 addr][11 n data...][62]`, with

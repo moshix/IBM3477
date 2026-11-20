@@ -180,6 +180,13 @@ func sameOrigin(r *http.Request) bool {
 	return strings.EqualFold(o, r.Host)
 }
 
+// maxClientMessage is the largest message accepted from the browser.
+const maxClientMessage = 128 << 10
+
+// writeWait is how long one message to the browser may take to write
+// before the browser counts as gone (a variable for tests).
+var writeWait = 10 * time.Second
+
 // WS runs one emulated terminal for the life of a WebSocket connection.
 func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 	ws, err := upgrader.Upgrade(w, r, nil)
@@ -187,9 +194,15 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer ws.Close()
+	// browser messages are small (a paste is cut to emu.MaxPasteChars
+	// characters by the page); a larger one ends the connection
+	ws.SetReadLimit(maxClientMessage)
 
 	// A single writer goroutine owns the socket. done closes when it
-	// stops, so senders never block on a dead connection.
+	// stops, so senders never block on a dead connection. A browser that
+	// stops reading fails the write deadline: the socket is then closed,
+	// which also ends the read loop and with it the session, so the
+	// machine goroutine never waits in must() for more than writeWait.
 	out := make(chan serverMsg, 8)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
@@ -198,7 +211,9 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 		defer wg.Done()
 		defer close(done)
 		for m := range out {
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if ws.WriteJSON(m) != nil {
+				ws.Close()
 				return
 			}
 		}
@@ -302,7 +317,12 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 			must(serverMsg{Type: "status", Text: "Powered off"})
 		case "paste":
 			if mach != nil {
-				mach.Paste(m.Text)
+				switch truncated, busy := mach.Paste(m.Text); {
+				case busy:
+					must(serverMsg{Type: "status", Text: "Paste ignored: the previous paste is still being typed"})
+				case truncated:
+					must(serverMsg{Type: "status", Text: fmt.Sprintf("Pasting only the first %d characters", emu.MaxPasteChars)})
+				}
 			}
 		case "cursor":
 			// a click on the screen moves the 5250 cursor there (the
@@ -356,6 +376,11 @@ func (s *Server) hostSession(cl *tn5250.Client, mach *emu.Machine, host, port, t
 	wg *sync.WaitGroup, status func(serverMsg)) {
 	defer wg.Done()
 	if err := cl.Connect(host, port, s.cfg.HostTLS); err != nil {
+		if errors.Is(err, tn5250.ErrHungUp) {
+			// the user hung up (disconnect, power, tab closed) while the
+			// dial or TLS handshake ran: hangUp's Disconnect aborted it
+			return
+		}
 		status(serverMsg{Type: "status", Text: "Cannot connect to " + target + ": " + shortErr(err)})
 		return
 	}

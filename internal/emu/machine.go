@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"io/fs"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"ibm3486/internal/board"
@@ -43,16 +44,23 @@ type Machine struct {
 	paste    chan []pasteStep
 	pending  []pasteStep
 	nextPast uint64
-	stop     chan struct{}
-	done     sync.WaitGroup
+	// pasting is set while a paste is being typed (read by Paste from
+	// other goroutines); stallSince is when the current pasted key began
+	// waiting for the keyboard buffer to drain (0 = not waiting)
+	pasting    atomic.Bool
+	stallSince uint64
+	stop       chan struct{}
+	stopOnce   sync.Once
+	done       sync.WaitGroup
 
 	// ctlCh hands a (new) workstation controller to the machine
 	// goroutine, which owns the board; nil detaches it.
 	ctlCh chan *controller.Controller
 	ctl   *controller.Controller
 
-	// codepage decodes the screen for copying (SetCodepage)
-	codepage string
+	// decode is the EBCDIC codepage table that decodes the screen for
+	// copying (SetCodepage)
+	decode *[256]rune
 
 	// non-volatile setup memory persistence (nvram.go)
 	nvPath string
@@ -81,6 +89,7 @@ func New(model string, roms fs.FS) (*Machine, error) {
 		stop:  make(chan struct{}),
 		ctlCh: make(chan *controller.Controller, 1),
 	}
+	mach.SetCodepage("")
 	mach.nvPath = mach.loadNVRAM(model)
 	return mach, nil
 }
@@ -105,9 +114,10 @@ func (m *Machine) Start(update func(*Snapshot)) {
 	go m.loop(update)
 }
 
-// Stop halts the machine and waits for its goroutine to exit.
+// Stop halts the machine and waits for its goroutine to exit. Calling it
+// again (or from several goroutines) is harmless.
 func (m *Machine) Stop() {
-	close(m.stop)
+	m.stopOnce.Do(func() { close(m.stop) })
 	m.done.Wait()
 }
 
@@ -120,19 +130,20 @@ func (m *Machine) loop(update func(*Snapshot)) {
 	defer tick.Stop()
 	start := time.Now()
 	var emulated uint64
-	var lastCells, lastFont []byte
-	var lastLED uint8 = 0xFF
-	var lastCur [3]int
-	var lastSound board.Sound
-	lastPub := time.Time{}
+	pub := newPublisher()
 	lastSave := time.Now()
 	for {
 		select {
 		case <-m.stop:
 			m.saveNVRAM()
 			return
-		case groups := <-m.paste:
-			m.pending = append(m.pending, groups...)
+		case steps := <-m.paste:
+			// one paste at a time: a paste arriving while another is
+			// still being typed is dropped (Paste)
+			if len(m.pending) == 0 {
+				m.pending = steps
+				m.pasting.Store(len(steps) > 0)
+			}
 			continue
 		case codes := <-m.keys:
 			m.b.IO.Keyboard().Key(codes...)
@@ -154,34 +165,71 @@ func (m *Machine) loop(update func(*Snapshot)) {
 				m.saveNVRAM() // the firmware may have changed the setup
 				lastSave = now
 			}
-			// sound changes go out at once (a click or the start/end of a
-			// tone must not wait for the 30 Hz screen rate)
-			snd := m.b.IO.Sound()
-			snd.Clicks -= m.mutedClicks // pasted keys do not click
-			if snd == lastSound && now.Sub(lastPub) < 33*time.Millisecond {
-				continue
-			}
-			rows, cols, ch, cells := m.b.Video.Screen()
-			font := m.b.Video.Font()
-			led := m.b.IO.LED()
-			crow, ccol, con := m.b.Video.Cursor()
-			s := &Snapshot{Rows: rows, Cols: cols, CellWidth: m.b.Video.CellWidth(cols),
-				CellHeight: ch, CursorRow: crow, CursorCol: ccol, CursorOn: con,
-				Cells: cells, LED: led, Text: screenText(cells, cols, m.codepage), Sound: snd}
-			cur := [3]int{crow, ccol, btoi(con)}
-			changed := !bytes.Equal(cells, lastCells) || led != lastLED || cur != lastCur ||
-				snd != lastSound
-			if !bytes.Equal(font, lastFont) {
-				s.Font = font
-				lastFont = font
-				changed = true
-			}
-			if changed {
-				lastCells, lastLED, lastPub, lastCur, lastSound = cells, led, now, cur, snd
+			if s := pub.check(m, now); s != nil {
 				update(s)
 			}
 		}
 	}
+}
+
+// publisher decides when the screen changed and builds the snapshots.
+// It looks at the board at most every 33 ms (sound at once) and does the
+// costly work, decoding the text and copying the 32 KB font, only for
+// what actually changed: an idle terminal costs one compare of the cells
+// and the font per check and allocates nothing.
+type publisher struct {
+	scratch   []byte // cells read from video RAM for the comparison
+	lastCells []byte // cells last published (owned by that snapshot)
+	lastText  []string
+	lastFont  []byte
+	lastGeom  [3]int // rows, cols, cell height
+	lastLED   uint8
+	lastCur   [3]int
+	lastSound board.Sound
+	lastCheck time.Time
+}
+
+func newPublisher() *publisher { return &publisher{lastLED: 0xFF} }
+
+// check returns a snapshot when something changed since the last one,
+// otherwise nil. Called from the machine goroutine.
+func (p *publisher) check(m *Machine, now time.Time) *Snapshot {
+	// sound changes go out at once (a click or the start/end of a
+	// tone must not wait for the 30 Hz screen rate)
+	snd := m.b.IO.Sound()
+	snd.Clicks -= m.mutedClicks // pasted keys do not click
+	if snd == p.lastSound && now.Sub(p.lastCheck) < 33*time.Millisecond {
+		return nil
+	}
+	p.lastCheck = now
+	rows, cols, ch, cells := m.b.Video.ScreenTo(p.scratch)
+	p.scratch = cells
+	led := m.b.IO.LED()
+	crow, ccol, con := m.b.Video.Cursor()
+	cur := [3]int{crow, ccol, btoi(con)}
+	geom := [3]int{rows, cols, ch}
+	cellsChanged := geom != p.lastGeom || !bytes.Equal(cells, p.lastCells)
+	fontRAM := m.b.Video.FontRAM()
+	fontChanged := !bytes.Equal(fontRAM, p.lastFont)
+	if !cellsChanged && !fontChanged && led == p.lastLED && cur == p.lastCur && snd == p.lastSound {
+		return nil
+	}
+	if cellsChanged {
+		// the published cells belong to the snapshot: a copy, never
+		// the scratch buffer reused at the next check
+		p.lastCells = append([]byte(nil), cells...)
+		p.lastText = screenText(p.lastCells, cols, m.decode)
+		p.lastGeom = geom
+	}
+	s := &Snapshot{Rows: rows, Cols: cols, CellWidth: m.b.Video.CellWidth(cols),
+		CellHeight: ch, CursorRow: crow, CursorCol: ccol, CursorOn: con,
+		Cells: p.lastCells, LED: led, Text: p.lastText, Sound: snd}
+	if fontChanged {
+		p.lastFont = append([]byte(nil), fontRAM...)
+		s.Font = p.lastFont
+	}
+	p.lastLED, p.lastCur, p.lastSound = led, cur, snd
+	return s
 }
 
 // run emulates cycles in 1 ms chunks so an attached workstation
@@ -195,7 +243,7 @@ func (m *Machine) run(cycles uint64) {
 		}
 		m.b.Run(n)
 		// type the next pasted key when its time has come
-		if len(m.pending) > 0 && m.b.CPU.Cycles >= m.nextPast {
+		if len(m.pending) > 0 && m.b.CPU.Cycles >= m.nextPast && m.pasteKeyboardReady() {
 			switch st := m.pending[0]; {
 			case m.ctl != nil && m.ctl.InputError():
 				// a pasted character was rejected (e.g. a letter in a
@@ -212,6 +260,7 @@ func (m *Machine) run(cycles uint64) {
 				m.pending = m.pending[1:]
 			}
 			m.nextPast = m.b.CPU.Cycles + pasteKeyGap
+			m.pasting.Store(len(m.pending) > 0)
 		}
 		if m.ctl != nil {
 			m.ctl.Tick(int(n))

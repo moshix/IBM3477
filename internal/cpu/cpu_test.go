@@ -62,7 +62,13 @@ func loadMeta(t *testing.T) suiteMeta {
 	t.Helper()
 	f, err := os.Open(filepath.Join(suiteDir, "metadata.json"))
 	if err != nil {
-		t.Skipf("8088 test suite not present (run tools/fetch_cpu_tests.sh): %v", err)
+		msg := fmt.Sprintf("SingleStepTests 8088 suite NOT RUN: %s/metadata.json missing (%v).\n"+
+			"Fetch it (~760 MB) with: sh tools/fetch_cpu_tests.sh\n"+
+			"Set %s=1 to make its absence a failure.", suiteDir, err, requireSuiteEnv)
+		if os.Getenv(requireSuiteEnv) != "" {
+			t.Fatal(msg)
+		}
+		t.Skip(msg)
 	}
 	defer f.Close()
 	var m suiteMeta
@@ -72,14 +78,35 @@ func loadMeta(t *testing.T) suiteMeta {
 	return m
 }
 
+// requireSuiteEnv names the environment variable that turns a missing
+// suite from a skip into a failure.
+const requireSuiteEnv = "CPU_SUITE_REQUIRED"
+
 // lookup returns the metadata for a test file key such as "00" or "80.3".
+// A few opcodes (8F, C6, C7) carry a per-reg table in the metadata but
+// are captured as one whole-opcode file; for those the file runs with the
+// status of /0 and the AND of the flag masks of all defined reg values.
 func (m suiteMeta) lookup(key string) opMeta {
 	op, reg, grouped := strings.Cut(key, ".")
 	om := m.Opcodes[op]
 	if grouped {
 		return om.Reg[reg]
 	}
-	return om
+	if om.Reg == nil {
+		return om
+	}
+	whole := opMeta{Status: om.Reg["0"].Status}
+	for _, rm := range om.Reg {
+		if rm.Status == "undefined" || rm.FlagsMask == nil {
+			continue
+		}
+		mask := *rm.FlagsMask
+		if whole.FlagsMask != nil {
+			mask &= *whole.FlagsMask
+		}
+		whole.FlagsMask = &mask
+	}
+	return whole
 }
 
 func loadTests(path string) ([]ssTest, error) {
@@ -209,8 +236,11 @@ func TestSingleStep8088(t *testing.T) {
 		key := strings.TrimSuffix(filepath.Base(path), ".json.gz")
 		om := meta.lookup(key)
 		switch om.Status {
-		case "undefined", "fpu", "prefix", "":
+		case "undefined", "fpu", "prefix":
 			continue // not meaningful for this firmware
+		case "":
+			t.Errorf("%s: no metadata for this test file; it would be skipped", key)
+			continue
 		}
 		mask := uint16(0xFFFF)
 		if om.FlagsMask != nil {

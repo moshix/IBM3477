@@ -520,10 +520,21 @@ function copyFallback(text) {
   canvas.focus();
 }
 
+// The terminal types at most this many characters of one paste (the
+// server drops the rest, emu.MaxPasteChars); cutting here also keeps the
+// message well under the server's WebSocket message limit.
+const MAX_PASTE = 8192;
+
 function pasteText(text) {
   if (!text || !poweredOn) return;
+  const chars = Array.from(text);
+  let note = '';
+  if (chars.length > MAX_PASTE) {
+    text = chars.slice(0, MAX_PASTE).join('');
+    note = ' (cut from ' + chars.length + ')';
+  }
   send({ type: 'paste', text: text });
-  statusText.textContent = 'Pasting ' + text.length + ' characters';
+  statusText.textContent = 'Pasting ' + Array.from(text).length + ' characters' + note;
 }
 
 // Paste without asking for clipboard permission: reading the clipboard

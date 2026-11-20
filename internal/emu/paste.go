@@ -113,17 +113,74 @@ func pasteSteps(text string) []pasteStep {
 	return out
 }
 
-// Paste queues text to be typed (safe to call from any goroutine).
-func (m *Machine) Paste(text string) {
+// MaxPasteChars is the most characters one paste types; the rest of a
+// longer text is dropped. At 100 characters a second that is well over a
+// minute of typing, and it keeps a client from queueing unbounded work.
+const MaxPasteChars = 8192
+
+// Paste queues text to be typed (safe to call from any goroutine). Only
+// one paste is typed at a time: text pasted while another paste is still
+// being typed is dropped and reported as busy, and everything after
+// MaxPasteChars characters is dropped and reported as truncated.
+func (m *Machine) Paste(text string) (truncated, busy bool) {
+	if m.pasting.Load() {
+		return false, true
+	}
+	text, truncated = truncateRunes(text, MaxPasteChars)
 	select {
 	case m.paste <- pasteSteps(text):
-	default: // a paste is already being typed
+	default: // a paste is already waiting to be typed
+		return false, true
 	}
+	return truncated, false
+}
+
+// pasteStallLimit is how long (CPU cycles) a pasted key waits for the
+// keyboard buffer to drain before the paste is given up: 5 s.
+const pasteStallLimit = 5 * cpuHz
+
+// pasteKeyboardReady reports whether the next pasted key may be pressed:
+// only once the keys pressed before it have been taken by the terminal,
+// so a paste never overflows the keyboard's 16-byte buffer (whose
+// overflow drops keys) while the firmware is busy. If the buffer does
+// not drain for pasteStallLimit, the paste is given up. Called from the
+// machine goroutine.
+func (m *Machine) pasteKeyboardReady() bool {
+	if !m.b.IO.Keyboard().Pending() {
+		m.stallSince = 0
+		return true
+	}
+	now := m.b.CPU.Cycles
+	if m.stallSince == 0 {
+		m.stallSince = now
+	} else if now-m.stallSince > pasteStallLimit {
+		m.pending = nil // the terminal stopped taking keys
+		m.pasting.Store(false)
+		m.stallSince = 0
+	}
+	return false
+}
+
+// truncateRunes cuts s after n characters.
+func truncateRunes(s string, n int) (string, bool) {
+	i := 0
+	for pos := range s {
+		if i == n {
+			return s[:pos], true
+		}
+		i++
+	}
+	return s, false
 }
 
 // SetCodepage sets the EBCDIC codepage used to decode the screen text
-// for copying (e.g. "37", "273"); call before Start.
-func (m *Machine) SetCodepage(cp string) { m.codepage = cp }
+// for copying (e.g. "37", "273"; "" = 37); call before Start.
+func (m *Machine) SetCodepage(cp string) {
+	if cp == "" {
+		cp = "37"
+	}
+	m.decode = tn5250.EBCDICTable(cp)
+}
 
 // screenText decodes the cells into text rows. Non-display cells are
 // left blank so passwords are never copied: the firmware marks a 5250
@@ -132,10 +189,7 @@ func (m *Machine) SetCodepage(cp string) { m.codepage = cp }
 // cellNonDisplay is the third-cell-byte bit of a non-display field.
 const cellNonDisplay = 0x80
 
-func screenText(cells []byte, cols int, codepage string) []string {
-	if codepage == "" {
-		codepage = "37"
-	}
+func screenText(cells []byte, cols int, decode *[256]rune) []string {
 	if cols == 0 {
 		return nil
 	}
@@ -149,7 +203,7 @@ func screenText(cells []byte, cols int, codepage string) []string {
 			hidden := extra&cellNonDisplay != 0 || (attr&0x20 != 0 && attr&0x07 == 0x07)
 			ru := ' '
 			if !hidden && ch != 0x00 && ch != 0x40 {
-				ru = tn5250.EBCDICToRune(codepage, ch)
+				ru = decode[ch]
 				if ru < 0x20 {
 					ru = ' '
 				}

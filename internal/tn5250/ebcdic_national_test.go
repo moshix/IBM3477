@@ -88,15 +88,20 @@ func TestCP870Latin2Bridge(t *testing.T) {
 		t.Fatal("CP870 map is missing its Latin-2 <-> Unicode bridge")
 	}
 
-	// Values verified against transmaps.h (ibm870_to_iso_8859_2 + the utility.c
-	// "870" workaround) and Python's iso-8859-2 codec.
+	// Values verified against the JDK's IBM870 charset (the IBM CCSID 870
+	// mapping). transmaps.h had 0x44 as 'Ă'; IBM870 has 'ţ' there and 'Ă' at
+	// 0x66 (capitals sit 0x20 above their small letters: ă 0x46 / Ă 0x66).
 	cases := []struct {
 		ebcdic byte
 		want   rune
 	}{
 		{0x47, 'č'}, // U+010D
 		{0x52, 'ę'}, // U+0119
-		{0x44, 'Ă'}, // U+0102
+		{0x72, 'Ę'}, // U+0118
+		{0x44, 'ţ'}, // U+0163
+		{0x66, 'Ă'}, // U+0102
+		{0xB7, 'ź'}, // U+017A
+		{0xB8, 'Ž'}, // U+017D
 	}
 	for _, c := range cases {
 		if got := cmap.toLocalRune(c.ebcdic); got != c.want {

@@ -5,8 +5,10 @@ package tn5250
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 // telnet.go ports lib5250's transport layer: the IAC/telnet state machine and
@@ -74,7 +76,11 @@ type stream struct {
 	termType string     // e.g. "IBM-3179-2"
 	env      []envEntry // NEW-ENVIRON vars sent in the IS reply
 
-	wmu sync.Mutex // serialises writes to conn (Run vs SendAID goroutines)
+	wmu      sync.Mutex     // serialises writes to conn (Run vs SendAID goroutines)
+	deadline writeDeadliner // sets the write deadline; nil if conn has none
+
+	errMu    sync.Mutex
+	writeErr error // the write failure that ended the session
 
 	// notFive250 is set when the host shows it is a 3270 (SNA/mainframe)
 	// host, not a 5250 one; the read loop then ends the session.
@@ -162,11 +168,43 @@ func codepageInfo(codepage string) (codePage string) {
 
 func (s *stream) readRaw() (byte, error) { return s.r.ReadByte() }
 
+// writeDeadliner is the part of net.Conn writeRaw uses to bound a write.
+type writeDeadliner interface {
+	SetWriteDeadline(t time.Time) error
+}
+
+// writeTimeout bounds one write to the host. Replies are written with the
+// client lock held, so a host that stops reading would otherwise freeze the
+// session (and the emulated terminal driving it) for good.
+var writeTimeout = 20 * time.Second
+
+// writeRaw sends b to the host. A failed or timed-out write is fatal to the
+// session: the connection is closed (ending the read loop, which reports the
+// error) and every later write fails at once.
 func (s *stream) writeRaw(b []byte) error {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
+	if err := s.writeError(); err != nil {
+		return err
+	}
+	if s.deadline != nil {
+		_ = s.deadline.SetWriteDeadline(time.Now().Add(writeTimeout))
+	}
 	_, err := s.conn.Write(b)
+	if err != nil {
+		s.errMu.Lock()
+		s.writeErr = fmt.Errorf("tn5250: write to host failed: %w", err)
+		s.errMu.Unlock()
+		_ = s.conn.Close()
+	}
 	return err
+}
+
+// writeError returns the error that ended writing to the host, if any.
+func (s *stream) writeError() error {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.writeErr
 }
 
 // ── IAC state machine (telnet_stream_get_byte) ──────────────────────────
@@ -220,11 +258,17 @@ func (s *stream) getByte() (int, error) {
 			if b == tnIAC {
 				s.state = stHaveSBIAC
 			} else {
+				if len(s.sbBuf) >= maxSubnegLen {
+					return 0, ErrSubnegTooLong
+				}
 				s.sbBuf = append(s.sbBuf, b)
 			}
 		case stHaveSBIAC:
 			switch b {
 			case tnIAC:
+				if len(s.sbBuf) >= maxSubnegLen {
+					return 0, ErrSubnegTooLong
+				}
 				s.sbBuf = append(s.sbBuf, tnIAC)
 			case tnSE:
 				s.doSB(s.sbBuf)
@@ -304,9 +348,29 @@ func (s *stream) doSB(sb []byte) {
 
 // ── record framing ──────────────────────────────────────────────────────
 
+// maxRecordLen caps one reassembled record. The GDS header's length field is
+// 16 bits, so no legitimate 5250 record exceeds 65535 bytes (after IAC
+// un-doubling, which is how they are stored here); real ones are far smaller -
+// even a full 27x132 Write To Display with an SBA and attribute per cell is
+// about 15 KB. A host that never sends IAC EOR must not grow the buffer
+// without limit in a server shared by many users.
+const maxRecordLen = 64 * 1024
+
+// maxSubnegLen caps one telnet subnegotiation (IAC SB ... IAC SE). The ones a
+// 5250 host sends (TERMINAL-TYPE SEND, NEW-ENVIRON SEND with a variable list)
+// are a few dozen bytes.
+const maxSubnegLen = 4096
+
+// ErrRecordTooLong / ErrSubnegTooLong end a session whose host sends a record
+// or subnegotiation past the caps above.
+var (
+	ErrRecordTooLong = errors.New("tn5250: host record exceeds 64 KB without end-of-record")
+	ErrSubnegTooLong = errors.New("tn5250: telnet subnegotiation exceeds 4 KB without SE")
+)
+
 // readRecord reads bytes through the IAC machine until an IAC EOR, returning the
 // complete GDS record (header + 5250 data). Empty EORs are skipped, matching
-// telnet_stream_handle_receive.
+// telnet_stream_handle_receive. A record longer than maxRecordLen is an error.
 func (s *stream) readRecord() ([]byte, error) {
 	var rec []byte
 	for {
@@ -319,6 +383,9 @@ func (s *stream) readRecord() ([]byte, error) {
 				return rec, nil
 			}
 			continue
+		}
+		if len(rec) >= maxRecordLen {
+			return nil, ErrRecordTooLong
 		}
 		rec = append(rec, byte(c))
 	}

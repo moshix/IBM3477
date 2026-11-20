@@ -333,7 +333,9 @@ func (s *session) transparentData() {
 	height := s.display.height()
 	curx := s.display.cursorX()
 	cury := s.display.cursorY()
-	if (cury-1)*width+curx+tdLen > width*height {
+	// cury/curx are 0-based here (session.c subtracted 1 from the 0-based
+	// row, letting TD near the bottom wrap to row 0 instead of failing).
+	if cury*width+curx+tdLen > width*height {
 		s.sendError(nrInvalidRowColAddr)
 		return
 	}
@@ -411,13 +413,19 @@ func (s *session) eraseToAddress() {
 	if attribute == 0xFF {
 		s.display.eraseRegion(cury, curx, y, x, 1, width)
 	}
-	if x >= width {
-		x = 0
+	// The current address after EA is the one following the ending address
+	// (as after RA), wrapping to the next row and from the last position to
+	// the first. y/x are 1-based, so the next address is 0-based (y-1, x);
+	// session.c passed the 1-based row as 0-based, one row too low.
+	ny, nx := y-1, x
+	if nx >= width {
+		nx = 0
+		ny++
 	}
-	if y >= height {
-		y = 0
+	if ny >= height {
+		ny = 0
 	}
-	s.display.setCursor(y, x)
+	s.display.setCursor(ny, nx)
 }
 
 // repeatToAddress fills from the cursor to an address with a byte

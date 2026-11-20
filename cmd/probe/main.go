@@ -58,7 +58,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		b.LoadNVRAM(data)
+		if err := b.LoadNVRAM(data); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	}
 
 	// Sample CS:IP after every instruction to find hot loops

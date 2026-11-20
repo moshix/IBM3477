@@ -1,5 +1,7 @@
 package board
 
+import "fmt"
+
 // Non-volatile setup memory.
 //
 // The 3477 keeps its Setup configuration in ordinary RAM that survives
@@ -24,15 +26,16 @@ package board
 // NVRAMRange returns the model's non-volatile RAM range (empty if none).
 func (b *Board) NVRAMRange() Range { return b.Model.NVRAM }
 
-// LoadNVRAM copies a saved image into the non-volatile RAM range. Short
-// images fill the start of the range; extra bytes are ignored.
-func (b *Board) LoadNVRAM(p []uint8) {
+// LoadNVRAM copies a saved image into the non-volatile RAM range. An
+// image of any other size than the range (a truncated or foreign file)
+// is rejected and the memory left as it is.
+func (b *Board) LoadNVRAM(p []uint8) error {
 	r := b.Model.NVRAM
-	n := int(r.End - r.Start)
-	if len(p) < n {
-		n = len(p)
+	if n := int(r.End - r.Start); len(p) != n {
+		return fmt.Errorf("nvram image is %d bytes, want %d", len(p), n)
 	}
-	copy(b.mem[r.Start:int(r.Start)+n], p)
+	copy(b.mem[r.Start:r.End], p)
+	return nil
 }
 
 // SaveNVRAM returns a copy of the non-volatile RAM range.

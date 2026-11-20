@@ -3,6 +3,8 @@ package emu
 import (
 	"reflect"
 	"testing"
+
+	"ibm3486/internal/tn5250"
 )
 
 // TestKeyGroups: characters become set-3 key presses and releases, with
@@ -29,13 +31,13 @@ func TestKeyGroups(t *testing.T) {
 func TestScreenTextHidesPasswords(t *testing.T) {
 	// two cells: 'A' (C1) normal 0x20, 'B' (C2) non-display 0x27
 	cells := []byte{0xC1, 0x20, 0x00, 0xC2, 0x27, 0x00}
-	if got := screenText(cells, 2, "37"); len(got) != 1 || got[0] != "A " {
+	if got := screenText(cells, 2, tn5250.EBCDICTable("37")); len(got) != 1 || got[0] != "A " {
 		t.Fatalf("screenText = %q, want [\"A \"]", got)
 	}
 	// host password field: the firmware stores 5250 attribute 0x27 as
 	// cell attribute 00 with bit 7 of the third byte set
 	cells = []byte{0xC1, 0x00, 0x00, 0x91, 0x00, 0x80, 0x86, 0x00, 0x80}
-	if got := screenText(cells, 3, "37"); len(got) != 1 || got[0] != "A  " {
+	if got := screenText(cells, 3, tn5250.EBCDICTable("37")); len(got) != 1 || got[0] != "A  " {
 		t.Fatalf("screenText = %q, want [\"A  \"]", got)
 	}
 }

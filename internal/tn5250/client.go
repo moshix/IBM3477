@@ -3,6 +3,7 @@
 package tn5250
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -29,8 +30,18 @@ type Client struct {
 	st   *stream
 	sess *session
 
-	conn io.ReadWriteCloser
-	cb   UpdateFunc
+	cb UpdateFunc
+
+	// connMu guards the host connection's lifetime state. It is separate from
+	// mu on purpose: a reply to the host is written while mu is held, and if
+	// the host stops reading that write blocks (until the write deadline).
+	// Disconnect must still be able to close the connection - which unblocks
+	// the write - so it takes only connMu, never mu. Lock order: mu, then
+	// connMu.
+	connMu     sync.Mutex
+	conn       io.Closer          // the attached connection, closed by Disconnect
+	hungUp     bool               // Disconnect was called: Connect must not attach
+	cancelDial context.CancelFunc // aborts a dial / TLS handshake in progress
 
 	insert bool // insert mode (operator.go, twinax bridge)
 
@@ -106,40 +117,95 @@ func (c *Client) Cols() int {
 	return c.disp.width()
 }
 
+// ErrHungUp is returned by Connect when Disconnect was called before or while
+// it was dialing: the user hung up, so the session is never attached.
+var ErrHungUp = errors.New("tn5250: disconnected")
+
+// dialTimeout bounds the TCP dial and the TLS handshake together, so a user
+// never waits for an OS timeout.
+var dialTimeout = 10 * time.Second
+
 // Connect dials host:port (optionally over TLS) and prepares the stream and
 // session. Telnet negotiation is answered lazily by the read loop in Run, so
-// this returns as soon as the socket is up.
+// this returns as soon as the socket is up. A Disconnect before or during the
+// dial / TLS handshake aborts it: Connect then returns ErrHungUp and nothing
+// is attached.
 func (c *Client) Connect(host, port string, useTLS bool) error {
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	defer cancel()
+	c.connMu.Lock()
+	if c.hungUp {
+		c.connMu.Unlock()
+		return ErrHungUp
+	}
+	c.cancelDial = cancel
+	c.connMu.Unlock()
+
 	addr := net.JoinHostPort(host, port)
 	var conn net.Conn
 	var err error
-	// A bounded dial, so a user hanging up never waits for an OS timeout.
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	dialer := &net.Dialer{}
 	if useTLS {
 		// Match sslstream.c's intent: TLS over the same TCP transport.
-		conn, err = tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{
+		td := &tls.Dialer{NetDialer: dialer, Config: &tls.Config{
 			ServerName:         host,
 			InsecureSkipVerify: true, // AS/400 hosts often use self-signed certs
-		})
+		}}
+		conn, err = td.DialContext(ctx, "tcp", addr)
 	} else {
-		conn, err = dialer.Dial("tcp", addr)
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
 	}
+
+	c.connMu.Lock()
+	c.cancelDial = nil
+	hungUp := c.hungUp
+	c.connMu.Unlock()
 	if err != nil {
+		if hungUp {
+			return ErrHungUp
+		}
 		return err
 	}
-	c.attach(conn)
+	if !c.attach(conn) {
+		_ = conn.Close() // Disconnect came after the dial finished
+		return ErrHungUp
+	}
 	return nil
 }
 
 // attach binds a connection to the client (also used by tests with an in-memory
-// pipe).
-func (c *Client) attach(conn io.ReadWriteCloser) {
+// pipe). It reports false, attaching nothing, when Disconnect was already
+// called.
+func (c *Client) attach(conn io.ReadWriteCloser) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	if c.hungUp {
+		return false
+	}
+	raw := conn
 	conn = &countingConn{ReadWriteCloser: conn, tx: &c.tx, rx: &c.rx}
 	c.conn = conn
 	c.st = newStream(conn, c.termType, c.codepage, c.deviceName, c.kbdType)
+	// Bound every write to the host where the transport supports it (TCP,
+	// TLS, net.Pipe): a host that stops reading must not hold c.mu forever.
+	if d, ok := raw.(writeDeadliner); ok {
+		c.st.deadline = d
+	}
 	c.sess = newSession(c.disp, c.st, c.termType)
+	return true
+}
+
+// closeConn closes the attached connection, if any. It needs only connMu, so
+// it works while another goroutine holds c.mu blocked in a write.
+func (c *Client) closeConn() {
+	c.connMu.Lock()
+	conn := c.conn
+	c.connMu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
 }
 
 // Run is the blocking read loop: it reads full records, feeds them to the
@@ -148,6 +214,9 @@ func (c *Client) Run() error {
 	if c.st == nil {
 		return errors.New("tn5250: not connected")
 	}
+	// However Run ends (EOF, an oversized record, a recovered panic, a failed
+	// write), the session is over: never leave the socket open behind it.
+	defer c.closeConn()
 	// Emit the initial (blank) screen so the UI has something to paint.
 	c.emit()
 
@@ -166,6 +235,15 @@ func (c *Client) Run() error {
 			c.mu.Unlock()
 			if fault != nil {
 				return fault // hung up after an operator action panicked
+			}
+			c.connMu.Lock()
+			hungUp := c.hungUp
+			c.connMu.Unlock()
+			if hungUp {
+				return nil // the user hung up (a write it cut short is no fault)
+			}
+			if werr := c.st.writeError(); werr != nil {
+				return werr // a write to the host failed or timed out
 			}
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -191,9 +269,7 @@ func (c *Client) guarded(fn func()) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			c.fault = fmt.Errorf("tn5250: recovered from panic in operator action: %v", r)
-			if c.conn != nil {
-				_ = c.conn.Close()
-			}
+			c.closeConn()
 			ok = false
 		}
 	}()
@@ -218,11 +294,19 @@ func (c *Client) processRecordSafe(rec []byte) (snap *Snapshot, err error) {
 	return snap, nil
 }
 
-// Disconnect closes the connection, unblocking Run.
+// Disconnect closes the connection, unblocking Run. It never takes c.mu, so it
+// works even while a write to a host that stopped reading holds it (closing
+// the connection fails that write). Called before or during Connect, it aborts
+// the dial / TLS handshake and Connect returns ErrHungUp. A Client is one
+// session: after Disconnect it cannot connect again.
 func (c *Client) Disconnect() {
-	c.mu.Lock()
-	conn := c.conn
-	c.mu.Unlock()
+	c.connMu.Lock()
+	c.hungUp = true
+	conn, cancel := c.conn, c.cancelDial
+	c.connMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	if conn != nil {
 		_ = conn.Close()
 	}
@@ -472,22 +556,59 @@ func (c *Client) handleLocalKey(name string) {
 		return
 	}
 	switch name {
-	case "FieldExit", "FieldPlus":
-		c.disp.fieldAdjust(f)
-		if f.isAutoEnter() {
-			c.sess.handleAIDKey(AIDEnter)
+	case "FieldExit", "FieldPlus", "FieldMinus":
+		// Field Exit / Field+ / Field- (display.c kf_field_exit / _plus /
+		// _minus): null the field from the cursor to its end, apply the
+		// field's adjust (right-adjust zero/blank fill; a signed numeric
+		// field is right-adjusted blank-filled, never into its sign
+		// position), then leave it. Field- is only valid in a numeric-only
+		// or signed numeric field.
+		minus := name == "FieldMinus"
+		if minus && !f.isNumOnly() && !f.isSignedNum() {
+			c.operatorError(KBDSrcFldMDisallowed)
 			return
 		}
-		c.disp.setCursorNextField()
-	case "FieldMinus":
-		// For signed numeric, force a negative sign in the last position.
-		if f.isSignedNum() {
-			data := c.disp.fieldData(f)
-			if len(data) > 0 {
-				data[len(data)-1] = c.disp.cmap.remote('-')
+		data := c.disp.fieldData(f)
+		if i := f.countLeft(c.disp.cursorY(), c.disp.cursorX()); i >= 0 {
+			for ; i < len(data); i++ {
+				data[i] = 0
 			}
 		}
-		c.disp.fieldAdjust(f)
+		f.setMDT(c.disp.dbuf())
+		switch {
+		case f.isSignedNum() && len(data) > 0:
+			// The sign position: '-' for Field-, cleared otherwise (Field+
+			// undoes an earlier Field-).
+			if minus {
+				data[len(data)-1] = c.disp.cmap.remote('-')
+			} else {
+				data[len(data)-1] = 0
+			}
+			c.disp.fieldAdjust(f)
+		case f.isNumOnly():
+			// No sign position: the sign is the zone of the low-order digit,
+			// D for negative, F for positive (Field+ clears an earlier
+			// Field-). It is set after the adjust has moved that digit to
+			// its final place.
+			c.disp.fieldAdjust(f)
+			if name != "FieldExit" {
+				zone := byte(0xF0)
+				if minus {
+					zone = 0xD0
+				}
+				for i := len(data) - 1; i >= 0; i-- {
+					if data[i] == 0 || data[i] == 0x40 {
+						continue
+					}
+					if lo := data[i] & 0x0F; lo <= 9 && (data[i]&0xF0 == 0xF0 || data[i]&0xF0 == 0xD0) {
+						data[i] = zone | lo
+					}
+					break
+				}
+			}
+		default:
+			c.disp.fieldAdjust(f)
+		}
 		if f.isAutoEnter() {
 			c.sess.handleAIDKey(AIDEnter)
 			return

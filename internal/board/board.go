@@ -115,7 +115,11 @@ func New(m *Model, roms fs.FS) (*Board, error) {
 	}
 	b.page[mmioBase>>12] = pgMMIO
 	if m.DefaultNVRAM != nil {
-		b.LoadNVRAM(m.DefaultNVRAM)
+		// the default is the start of the range (the rest stays zero)
+		if len(m.DefaultNVRAM) > int(m.NVRAM.End-m.NVRAM.Start) {
+			return nil, fmt.Errorf("%s default setup larger than its NVRAM", m.Name)
+		}
+		copy(b.mem[m.NVRAM.Start:m.NVRAM.End], m.DefaultNVRAM)
 	}
 	b.IO = newIOGA(b)
 	b.I2C = newI2C()

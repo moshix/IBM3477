@@ -137,10 +137,14 @@ func (v *Video) Tick(n int) {
 //	0x20112         character cell height - 1 (13 / 10 / 0B -> 20/17/12)
 //	0x20115         displayed rows (18 / 1B / 2B -> 24 / 27 / 43)
 //
+//	0x20123         displayed columns - 1 (4F / 83 -> 80 / 132)
+//
 // Each cell is 3 bytes (EBCDIC character, attribute, extra) and rows are
 // stored back to back: 240 bytes apart in 80-column modes, 396 in
-// 132-column modes. The register selecting 80 or 132 displayed columns
-// is not identified yet, so 80 columns are assumed (PROVISIONAL).
+// 132-column modes. The 27x132 mode (record selected by C000:3511 when
+// the session's line length [0x1277] is 0x84) programs 0x20123 = 83,
+// 0x20115 = 1B, screen start 4201 and status row 6E01; the 24x80 mode
+// 4F, 18, 4200 and 6E00 (TestFirmware27x132, controller package).
 const (
 	videoSeg    = 0x8000
 	cellBytes   = 3
@@ -148,6 +152,7 @@ const (
 	regStatus   = 0x34
 	regCellH    = 0x12
 	regRows     = 0x15
+	regCols     = 0x23
 	defaultRows = 24
 	defaultCols = 80
 )
@@ -196,6 +201,12 @@ func (v *Video) CellWidth(cols int) int {
 // the bottom), the character cell height in scan lines, and a copy of the
 // cells (3 bytes each).
 func (v *Video) Screen() (rows, cols, cellHeight int, cells []byte) {
+	return v.ScreenTo(nil)
+}
+
+// ScreenTo is Screen, reusing buf for the cells when it is large enough
+// (the result then aliases buf).
+func (v *Video) ScreenTo(buf []byte) (rows, cols, cellHeight int, cells []byte) {
 	mem := v.b.Mem()
 	word := func(r int) uint32 { return uint32(v.regs[r]) | uint32(v.regs[r+1])<<8 }
 	start := videoSeg + word(regStart)
@@ -209,8 +220,17 @@ func (v *Video) Screen() (rows, cols, cellHeight int, cells []byte) {
 		cellHeight = 20
 	}
 	cols = defaultCols
+	if c := int(v.regs[regCols]) + 1; c == 132 {
+		cols = c
+	}
 	rows = n + 1
-	cells = make([]byte, rows*cols*cellBytes)
+	size := rows * cols * cellBytes
+	if cap(buf) >= size {
+		cells = buf[:size]
+		clear(cells)
+	} else {
+		cells = make([]byte, size)
+	}
 	row := func(dst int, src uint32) {
 		if src+uint32(cols*cellBytes) <= uint32(len(mem)) {
 			copy(cells[dst*cols*cellBytes:(dst+1)*cols*cellBytes], mem[src:])
@@ -227,9 +247,14 @@ func (v *Video) Screen() (rows, cols, cellHeight int, cells []byte) {
 // Font returns a copy of the character-generator RAM (both fonts).
 func (v *Video) Font() []byte {
 	f := make([]byte, fontSize)
-	copy(f, v.b.Mem()[fontBase:fontBase+fontSize])
+	copy(f, v.FontRAM())
 	return f
 }
+
+// FontRAM returns the character-generator RAM itself, without copying:
+// valid only until the CPU runs again, and not to be modified (callers
+// compare it with a saved copy to see whether the font changed).
+func (v *Video) FontRAM() []byte { return v.b.Mem()[fontBase : fontBase+fontSize] }
 
 // Reg16 reads a 16-bit CRTC register pair without side effects (tools).
 func (v *Video) Reg16(off uint32) uint16 {

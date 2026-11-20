@@ -20,10 +20,14 @@ import "math/bits"
 //	F4               enable
 //	EE ...           echo, periodically (keep-alive)
 type Keyboard struct {
-	out     []uint8 // bytes queued for the terminal
-	last    uint8   // last byte sent (for FE resend)
-	needArg uint8   // command waiting for its argument byte (ED, F3, F0)
-	keyList uint8   // FB/FC/FD collecting key codes (0 = none)
+	// out holds key codes (and the power-on AA/ID) queued for the
+	// terminal; resp holds command replies, which go out first (reply).
+	// Key codes are capped at keyBufferSize like a real keyboard's buffer.
+	out     []uint8
+	resp    []uint8
+	last    uint8 // last byte sent (for FE resend)
+	needArg uint8 // command waiting for its argument byte (ED, F3, F0)
+	keyList uint8 // FB/FC/FD collecting key codes (0 = none)
 	enabled bool
 	// mode holds the set-3 key type of each make code
 	mode [0x100]uint8
@@ -74,23 +78,44 @@ func (k *Keyboard) setAll(m uint8) {
 	}
 }
 
+// keyBufferSize is how many key-code bytes the keyboard buffers for a
+// terminal that does not read them fast enough (the line carries about
+// one byte per ms). A real keyboard buffers about 16 bytes and drops
+// further keystrokes (an overrun); so does this one, which also keeps a
+// client flooding key events from growing the queue without bound.
+const keyBufferSize = 16
+
 func (k *Keyboard) send(b ...uint8) { k.out = append(k.out, b...) }
 
 // reply queues the answer to a command from the terminal ahead of key
 // codes still waiting, as a real keyboard answers a command first. The
 // 3477 sends an Echo (EE) about every 5 s; with a key code in front of
 // the EE reply it took the keyboard for broken and reset it (FF and all
-// key modes again), losing the key. A break already begun (F0 sent) is
-// finished first: its key code must follow the F0.
-func (k *Keyboard) reply(b ...uint8) {
-	at := 0
+// key modes again), losing the key. Replies have their own queue, so
+// this costs nothing per key code waiting; next() sends them first,
+// except that a break already begun (F0 sent) is finished first: its
+// key code must follow the F0.
+func (k *Keyboard) reply(b ...uint8) { k.resp = append(k.resp, b...) }
+
+// pending reports whether a byte is waiting for the terminal.
+func (k *Keyboard) pending() bool { return len(k.out)+len(k.resp) > 0 }
+
+// Pending reports whether key codes or replies are still waiting for the
+// terminal to take them. Paste waits for this before pressing the next
+// key, so its keys never overflow the keyboard's small buffer.
+func (k *Keyboard) Pending() bool { return k.pending() }
+
+// queued returns the bytes waiting for the terminal in the order next()
+// will send them (tests).
+func (k *Keyboard) queued() []uint8 {
+	var q []uint8
 	if k.last == 0xF0 && len(k.out) > 0 {
-		at = 1
+		q = append(q, k.out[0])
+		q = append(q, k.resp...)
+		return append(q, k.out[1:]...)
 	}
-	out := make([]uint8, 0, len(k.out)+len(b))
-	out = append(out, k.out[:at]...)
-	out = append(out, b...)
-	k.out = append(out, k.out[at:]...)
+	q = append(q, k.resp...)
+	return append(q, k.out...)
 }
 
 // Command handles one byte written by the terminal.
@@ -131,7 +156,7 @@ func (k *Keyboard) Command(c uint8) {
 	k.keyList = 0
 	switch c {
 	case 0xFF: // reset: ack, then self test passed and the ID
-		k.out = k.out[:0]
+		k.out, k.resp = k.out[:0], k.resp[:0]
 		k.enabled = true
 		k.reply(0xFA)
 		k.powerOn()
@@ -182,20 +207,30 @@ func (k *Keyboard) Command(c uint8) {
 // while held for auto-repeat) or F0 + code for the release. The key's
 // set-3 type decides what actually goes to the terminal: releases only for
 // make/break keys, repeats only for typematic keys.
+//
+// A make code that finds the buffer full (keyBufferSize) is dropped, as
+// on a keyboard overrun, and its key is not marked as held. A release is
+// sent only for a key that is held, and is never dropped: the terminal
+// must not be left with a Shift it thinks is still down. Each release
+// thus pairs with one accepted make, which keeps the queue bounded.
 func (k *Keyboard) Key(codes ...uint8) {
 	for i := 0; i < len(codes); i++ {
 		c := codes[i]
 		if c == 0xF0 && i+1 < len(codes) {
 			i++
 			code := codes[i]
+			wasHeld := k.held[code]
 			k.held[code] = false
-			if k.mode[code]&keyBreak != 0 {
+			if wasHeld && k.mode[code]&keyBreak != 0 {
 				k.send(0xF0, code)
 			}
 			continue
 		}
 		if k.held[c] && k.mode[c]&keyTypematic == 0 {
 			continue // held key that does not repeat
+		}
+		if len(k.out) >= keyBufferSize {
+			continue // overrun: the keystroke is lost
 		}
 		k.held[c] = true
 		k.send(c)
@@ -204,11 +239,17 @@ func (k *Keyboard) Key(codes ...uint8) {
 
 // next pops the next byte for the terminal, if any.
 func (k *Keyboard) next() (uint8, bool) {
-	if len(k.out) == 0 {
+	var b uint8
+	switch {
+	case len(k.resp) > 0 && !(k.last == 0xF0 && len(k.out) > 0):
+		b = k.resp[0]
+		k.resp = k.resp[1:]
+	case len(k.out) > 0:
+		b = k.out[0]
+		k.out = k.out[1:]
+	default:
 		return 0, false
 	}
-	b := k.out[0]
-	k.out = k.out[1:]
 	k.last = b
 	return b, true
 }
@@ -318,7 +359,7 @@ func (p *kbdPort) tick(n int) {
 		p.txQueued = false
 		p.txActive = true
 		p.busy = byteCycles
-	case len(p.kbd.out) > 0:
+	case p.kbd.pending():
 		p.busy = byteCycles
 	}
 }

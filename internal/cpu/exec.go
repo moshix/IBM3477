@@ -1,10 +1,24 @@
 package cpu
 
+// maxPrefixes bounds the prefix bytes decoded in one call of execute, so
+// that a long (or, with IP wrapping, endless) run of prefixes cannot hang
+// Step. Real code uses at most a few; a longer run is decoded over
+// several calls with the prefix state kept (see CPU.inPrefix).
+const maxPrefixes = 16
+
 // execute decodes prefixes and runs one instruction.
 func (c *CPU) execute() {
-	c.segOver = -1
-	c.rep = 0
-	for {
+	if !c.inPrefix {
+		c.segOver = -1
+		c.rep = 0
+		c.instStart = c.IP
+	}
+	c.inPrefix = false
+	for n := 0; ; n++ {
+		if n == maxPrefixes {
+			c.inPrefix = true
+			return
+		}
 		op := c.fetch8()
 		switch op {
 		case 0x26, 0x2E, 0x36, 0x3E:
@@ -346,7 +360,7 @@ func (c *CPU) exec(op uint8) {
 		c.Flags &^= FlagIF
 	case 0xFB: // STI: interrupts are recognised after the next instruction
 		c.Flags |= FlagIF
-		c.noIntr = true
+		c.stiShadow = true
 	case 0xFC:
 		c.Flags &^= FlagDF
 	case 0xFD:
@@ -419,7 +433,8 @@ func (c *CPU) aluForm(op uint8) {
 
 // stringOp runs MOVS CMPS STOS LODS SCAS, with REP/REPE/REPNE repetition.
 // Source is DS:SI (override allowed), destination is always ES:DI.
-// Each Step runs every iteration of a repeated instruction.
+// A direct call of execute runs every iteration of a repeated instruction;
+// under Step it may stop early and resume on the next Step.
 func (c *CPU) stringOp(op uint8) {
 	word := op&1 != 0
 	step := uint16(1)
@@ -486,8 +501,33 @@ func (c *CPU) stringOp(op uint8) {
 		if compares && c.flag(FlagZF) != (c.rep == 0xF3) {
 			break
 		}
+		if c.R[CX] == 0 || !c.stepping {
+			continue
+		}
+		// Under Step, stop between iterations so that the interrupt is
+		// taken (as the 8088 does) or the board's timers can advance;
+		// the next Step re-decodes the instruction from its first
+		// prefix and carries on with the updated CX/SI/DI.
+		if c.intrPending() {
+			c.IP = c.instStart
+			return
+		}
+		if c.Cycles-c.stepStart >= repCycleBudget {
+			// An emulator artefact, not a hardware event: credit the
+			// cycles of fetching the instruction again.
+			if n := 4 * uint64(c.IP-c.instStart); n < c.Cycles-c.stepStart {
+				c.Cycles -= n
+			}
+			c.IP = c.instStart
+			return
+		}
 	}
 }
+
+// repCycleBudget is how many cycles one Step may spend in a REP string
+// instruction before stopping it to let the board's devices run (about
+// 0.2 ms; the shortest device window, vertical sync, is 1,869 cycles).
+const repCycleBudget = 1024
 
 // group3 handles F6/F7: TEST NOT NEG MUL IMUL DIV IDIV (/1 aliases TEST).
 func (c *CPU) group3(word bool) {

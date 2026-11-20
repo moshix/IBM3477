@@ -399,14 +399,33 @@ func (s *session) writeErrorCode(readop int) {
 // ── read commands ───────────────────────────────────────────────────────
 
 func (s *session) readCmd(readop int) {
+	// A pending operator error - Write Error Code's message on the error line
+	// with input inhibited - persists until the operator presses Reset, as on
+	// a real 5250, even when the host follows the WEC with a read (the usual
+	// "ESC 21 msg ESC 52 ..." sequence). session.c lost it: the read's CC1
+	// sets the keystate to LOCKED, and the read then un-inhibits every
+	// LOCKED keyboard, restoring the saved message line. Remember the error
+	// state and keep it; without one the read unlocks as before.
+	pendingErr := s.display.inhibited()
+	errKeystate := s.display.keystate
+
 	cc1 := s.rec.getByte()
 	s.handleCC1(cc1)
 	cc2 := s.rec.getByte()
 	s.handleCC2(cc2)
 
 	s.display.indicatorClear(indXSystem | indXClock)
-	// A read only uninhibits if we were in a normal locked state, not an error.
-	if s.display.keystate == KeyStateLocked {
+	switch {
+	case pendingErr:
+		// Still inhibited; Reset clears it. The read itself releases any
+		// host lock (Reset is refused while LOCKED, so keeping LOCKED here
+		// would leave the operator no way out).
+		if errKeystate == KeyStateLocked {
+			errKeystate = KeyStateUnlocked
+		}
+		s.display.keystate = errKeystate
+	case s.display.keystate == KeyStateLocked:
+		// A read only uninhibits if we were in a normal locked state.
 		s.display.uninhibit()
 		s.display.keystate = KeyStateUnlocked
 	}

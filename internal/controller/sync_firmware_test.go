@@ -13,7 +13,7 @@ func stationMismatches(r *firmwareRig) []int {
 	d := r.h.scr.Data
 	var bad []int
 	for p, v := range d {
-		row, col := p/80, p%80
+		row, col := p/r.h.scr.Cols, p%r.h.scr.Cols
 		ch := cells[(row*cols+col)*3]
 		want := v
 		if v == 0 || (v >= 0x20 && v <= 0x3F) {
@@ -86,7 +86,7 @@ func fastTyping(t *testing.T, seed int64) {
 	if bad := stationMismatches(r); len(bad) > 0 {
 		_, cols, _, cells := r.b.Video.Screen()
 		for _, p := range bad[:min(len(bad), 10)] {
-			row, col := p/80, p%80
+			row, col := p/r.h.scr.Cols, p%r.h.scr.Cols
 			t.Errorf("row %d col %d: station %02X, host %02X", row, col, cells[(row*cols+col)*3], d[p])
 		}
 		t.Fatalf("%d cells differ", len(bad))

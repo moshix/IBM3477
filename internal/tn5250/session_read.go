@@ -76,38 +76,47 @@ func (s *session) sendField(buf *[]byte, f *field) {
 	// reconstruct the full field by concatenating every continuous subfield from
 	// the first through the last, in order (tn5250_session_send_field,
 	// session.c:487-520).
+	//
+	// One walk both sizes and gathers the data, so the two can never disagree
+	// (a host can mark one SF both first and last, or send stray middles): it
+	// stops after a subfield marked last (f itself included), at a field that
+	// is not continuous, or when it comes back round to f.
 	if f.continuous {
 		if !f.continuedFirst {
 			return
 		}
-		size = f.length
-		for iter := f.next; iter != nil && iter.continuous && iter != f; iter = iter.next {
-			size += iter.length
-			if iter.continuedLast {
-				break
+		data = append([]byte(nil), data...)
+		if !f.continuedLast {
+			for iter := f.next; iter != nil && iter != f && iter.continuous; iter = iter.next {
+				data = append(data, s.display.fieldData(iter)...)
+				if iter.continuedLast {
+					break
+				}
 			}
 		}
-		data = make([]byte, 0, size)
-		for iter := f; iter != nil && iter.continuous; iter = iter.next {
-			data = append(data, s.display.fieldData(iter)...)
-			if iter.continuedLast || iter.next == f {
-				break
-			}
-		}
+		size = len(data)
 	}
 
 	switch s.readOpcode {
 	case CmdReadInputFields, CmdReadImmediate:
 		if f.isSignedNum() {
-			for n := 0; n < size-1; n++ {
+			// The last position of a signed numeric field is its sign; only
+			// the digit positions (size-1 bytes) are sent, the low-order
+			// digit's zone set to D when the sign position holds '-'.
+			// (session.c appended size-1 bytes and then the low-order digit
+			// again, sending one byte too many; a 1-position field has no
+			// digit positions and sends nothing.)
+			if size < 2 {
+				break
+			}
+			for n := 0; n < size-2; n++ {
 				*buf = append(*buf, blankIfNull(data[n]))
 			}
-			c := data[size-2]
+			c := blankIfNull(data[size-2])
 			if cmap.local(data[size-1]) == '-' {
-				*buf = append(*buf, 0xd0|(0x0f&c))
-			} else {
-				*buf = append(*buf, c)
+				c = 0xd0 | (0x0f & c)
 			}
+			*buf = append(*buf, c)
 		} else {
 			for n := 0; n < size; n++ {
 				*buf = append(*buf, blankIfNull(data[n]))
@@ -117,15 +126,21 @@ func (s *session) sendField(buf *[]byte, f *field) {
 	case CmdReadMDTFields, CmdReadMDTFieldsAlt, CmdReadImmediateAlt:
 		*buf = append(*buf, OrderSBA, byte(f.startRow+1), byte(f.startCol+1))
 
-		c := data[size-1]
-		if f.isSignedNum() {
-			size--
+		// A zero-length field sends its SBA and no data.
+		var c byte
+		if size > 0 {
+			c = data[size-1]
+		}
+		if f.isSignedNum() && size > 0 {
+			size-- // drop the sign position
 			if size > 0 {
 				c = data[size-1]
 			} else {
 				c = 0
 			}
-			if size > 1 && data[size] == cmap.remote('-') &&
+			// size > 0, not session.c's size > 1: a 2-position field ("5-")
+			// has one digit, and it is negative too.
+			if size > 0 && data[size] == cmap.remote('-') &&
 				isDigit(int(cmap.local(c))) {
 				c = 0xd0 | (0x0f & c)
 			}

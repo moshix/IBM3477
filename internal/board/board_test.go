@@ -193,7 +193,7 @@ func TestKeyboardKeyModes(t *testing.T) {
 		0xFC, 0x59, 0x12, 0x14, 0x39, 0x19, 0xF4} {
 		k.Command(c)
 	}
-	k.out = k.out[:0]
+	k.out, k.resp = k.out[:0], k.resp[:0]
 	k.Key(0x1C)       // a down
 	k.Key(0x1C)       // auto-repeat: dropped (make-only key)
 	k.Key(0xF0, 0x1C) // a up: no release code

@@ -7,6 +7,18 @@ The twinax cable to the AS/400 is replaced by **TN5250 over TCP/IP**:
 you enter a host name or IP address and a port, like in
 [web5250](../web5250).
 
+## The terminal we emulate
+
+![IBM 3477 InfoWindow display station with its 122-key keyboard](IBM_3477.jpg)
+
+This is the **IBM 3477 InfoWindow**, the terminal this project emulates.
+It is a 5250 display station that connects to an AS/400 over twinax
+cable. Its screen shows 24×80 or 27×132 characters, and it comes with
+the 122-key IBM 5250 keyboard: 24 function keys, a block of command keys
+on the left and a numeric keypad. The emulator runs its original
+firmware, so the screen, the indicators and even the keyboard click
+behave like the real one shown above.
+
 ```
 browser keys -> emulated keyboard -> terminal ROM -> twinax poll response
              -> workstation-controller bridge -> TN5250 -> host

@@ -34,6 +34,10 @@ type Client struct {
 
 	insert bool // insert mode (operator.go, twinax bridge)
 
+	// fault is the panic an operator action recovered from (guarded); the
+	// session was hung up and Run returns it.
+	fault error
+
 	// tx/rx count the bytes sent to and received from the host
 	// (traffic.go)
 	tx, rx atomic.Uint64
@@ -157,6 +161,12 @@ func (c *Client) Run() error {
 			return err
 		}
 		if err != nil {
+			c.mu.Lock()
+			fault := c.fault
+			c.mu.Unlock()
+			if fault != nil {
+				return fault // hung up after an operator action panicked
+			}
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
@@ -170,6 +180,25 @@ func (c *Client) Run() error {
 			c.cb(snap)
 		}
 	}
+}
+
+// guarded runs an operator action (typing, a key, a cursor move) with
+// c.mu held, as processRecordSafe does for host records: a panic (e.g. a
+// field table the host left inconsistent) must end only THIS session, not
+// crash the server for every user. On a panic it records the fault, hangs
+// up (Run then returns the fault) and reports false; c.mu stays held.
+func (c *Client) guarded(fn func()) (ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.fault = fmt.Errorf("tn5250: recovered from panic in operator action: %v", r)
+			if c.conn != nil {
+				_ = c.conn.Close()
+			}
+			ok = false
+		}
+	}()
+	fn()
+	return true
 }
 
 // processRecordSafe processes one record under the session lock and converts any
@@ -267,15 +296,21 @@ func (c *Client) SendAID(aidName string, cursorRow, cursorCol int, fields map[in
 		return errors.New("tn5250: not connected")
 	}
 
-	c.applyFieldEdits(fields)
-	c.setCursorClamped(cursorRow, cursorCol)
+	if !c.guarded(func() {
+		c.applyFieldEdits(fields)
+		c.setCursorClamped(cursorRow, cursorCol)
 
-	if local {
-		c.handleLocalKey(aidName)
-	} else if c.sess.readOpcode != 0 || code < 0 {
-		// Faithful to display.c do_aidkey: AID keys are ignored outside a read,
-		// except the pseudo (negative) codes.
-		c.sess.handleAIDKey(code)
+		if local {
+			c.handleLocalKey(aidName)
+		} else if c.sess.readOpcode != 0 || code < 0 {
+			// Faithful to display.c do_aidkey: AID keys are ignored outside a
+			// read, except the pseudo (negative) codes.
+			c.sess.handleAIDKey(code)
+		}
+	}) {
+		err := c.fault
+		c.mu.Unlock()
+		return err
 	}
 
 	snap := c.buildSnapshot()
@@ -293,7 +328,10 @@ func (c *Client) SendAttn() {
 		c.mu.Unlock()
 		return
 	}
-	c.sess.handleAIDKey(aidAttn)
+	if !c.guarded(func() { c.sess.handleAIDKey(aidAttn) }) {
+		c.mu.Unlock()
+		return
+	}
 	snap := c.buildSnapshot()
 	c.mu.Unlock()
 	if c.cb != nil {

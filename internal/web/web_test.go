@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -501,5 +502,67 @@ func TestRecordedClicksServed(t *testing.T) {
 	html, _ := staticFiles.ReadFile("static/index.html")
 	if !strings.Contains(string(html), `<option value="realistic">Realistic (recorded IBM 3477)</option>`) {
 		t.Error("Settings lack the realistic key click")
+	}
+}
+
+// TestLockedServerIgnoresBrowserHost: with Lock the server connects only
+// to its configured host:port, whatever host and port the browser sends,
+// and tells the page that the host is fixed.
+func TestLockedServerIgnoresBrowserHost(t *testing.T) {
+	if _, err := os.Stat("../../ibm3477_part1.bin"); err != nil {
+		t.Skip("3477 ROMs not present")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			accepted <- c
+		}
+	}()
+	lhost, lport, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(lport)
+	s := New(Config{Model: "3477", RomDir: "../..", Host: lhost, Port: port, Lock: true})
+
+	rec := httptest.NewRecorder()
+	s.Page(rec, httptest.NewRequest("GET", "/", nil))
+	if !strings.Contains(rec.Body.String(), `"locked":true`) {
+		t.Error("page does not say the host is locked")
+	}
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	ws.WriteJSON(clientMsg{Type: "power", Model: "3477"})
+	// an address the visitor must not reach through the server
+	ws.WriteJSON(clientMsg{Type: "connect", Host: "10.255.255.1", Port: "6379", Size: "24x80"})
+	ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+	for {
+		var m serverMsg
+		if err := ws.ReadJSON(&m); err != nil {
+			t.Fatalf("waiting for the connection: %v", err)
+		}
+		if m.Type != "status" {
+			continue
+		}
+		if strings.Contains(m.Text, "10.255.255.1") {
+			t.Fatalf("server used the browser's host: %q", m.Text)
+		}
+		if strings.HasPrefix(m.Text, "Connected to "+ln.Addr().String()) {
+			break
+		}
+	}
+	select {
+	case c := <-accepted:
+		c.Close()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the locked host never saw the connection")
 	}
 }

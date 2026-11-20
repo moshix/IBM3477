@@ -2,7 +2,9 @@ package tn5250
 
 import (
 	"bytes"
+	"strings"
 	"testing"
+	"time"
 )
 
 // newOperatorClient returns a connected client showing one 5-byte input
@@ -172,29 +174,114 @@ func TestBackspaceDeletes(t *testing.T) {
 	}
 }
 
-// TestMoveCursor: a click inside an input field moves the cursor there;
-// clicks outside input fields and off-screen positions do not.
+// TestMoveCursor: a click moves the cursor anywhere on the host screen,
+// protected text included (Help and F4 act on the cursor position);
+// off-screen positions do not move it.
 func TestMoveCursor(t *testing.T) {
 	c, _ := newOperatorClient(t, 0x40) // input field row 2, cols 5-9
 	c.MoveCursor(2, 8)
 	if st := c.Screen(); st.CursorRow != 2 || st.CursorCol != 8 {
 		t.Fatalf("cursor = %d,%d, want 2,8", st.CursorRow, st.CursorCol)
 	}
-	c.MoveCursor(10, 33) // protected area
-	c.MoveCursor(2, 4)   // the field's attribute byte
-	c.MoveCursor(24, 0)  // the status row is not part of the host screen
+	c.MoveCursor(10, 33) // protected text
+	if st := c.Screen(); st.CursorRow != 10 || st.CursorCol != 33 {
+		t.Fatalf("cursor = %d,%d, want 10,33", st.CursorRow, st.CursorCol)
+	}
+	c.MoveCursor(24, 0) // the status row is not part of the host screen
 	c.MoveCursor(-1, 5)
-	if st := c.Screen(); st.CursorRow != 2 || st.CursorCol != 8 {
-		t.Fatalf("cursor moved to %d,%d by a click outside the field", st.CursorRow, st.CursorCol)
+	if st := c.Screen(); st.CursorRow != 10 || st.CursorCol != 33 {
+		t.Fatalf("cursor moved to %d,%d by an off-screen click", st.CursorRow, st.CursorCol)
 	}
 }
 
-// TestMoveCursorBypassField: a click in an output-only (bypass) field
-// does not move the cursor.
-func TestMoveCursorBypassField(t *testing.T) {
-	c, _ := newOperatorClient(t, 0x60) // FFW 0x60xx: bypass
-	c.MoveCursor(2, 7)
-	if st := c.Screen(); st.CursorRow != 2 || st.CursorCol != 5 {
-		t.Fatalf("cursor = %d,%d, want it left at 2,5", st.CursorRow, st.CursorCol)
+// TestOperatorPanicEndsOnlyTheSession: a panic in an operator action is
+// recovered: the lock is released, the connection hung up, and Run
+// reports the fault instead of the process crashing.
+func TestOperatorPanicEndsOnlyTheSession(t *testing.T) {
+	c, conn := newOperatorClient(t, 0x40)
+	c.withSession(func() { panic("corrupt field table") })
+	if !conn.closed {
+		t.Error("connection not hung up after the panic")
+	}
+	// the lock must be free again
+	done := make(chan struct{})
+	go func() { c.Screen(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("client lock still held after the panic")
+	}
+	if err := c.Run(); err == nil || !strings.Contains(err.Error(), "corrupt field table") {
+		t.Fatalf("Run = %v, want the recovered panic", err)
+	}
+}
+
+// TestNonASCIIRejectedInNumericFields: characters beyond ASCII (as pasted)
+// are checked against the field type like any other.
+func TestNonASCIIRejectedInNumericFields(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ffw1 byte
+		src  int
+	}{
+		{"digits only", 0x45, KBDSrcOnly09},
+		{"numeric only", 0x43, KBDSrcNumOnly},
+		{"signed numeric", 0x47, KBDSrcOnly09},
+	} {
+		c, _ := newOperatorClient(t, tc.ffw1)
+		c.TypeChar('é')
+		st := c.Screen()
+		if !st.Inhibited || st.ErrorCode != tc.src {
+			t.Errorf("%s: 'é' gave inhibited=%v code %04X, want %04X",
+				tc.name, st.Inhibited, st.ErrorCode, tc.src)
+		}
+		if got := fieldText(c); got != "" {
+			t.Errorf("%s: field = %q, want it empty", tc.name, got)
+		}
+	}
+	// alphabetic-only fields take letters beyond ASCII
+	c, _ := newOperatorClient(t, 0x41)
+	c.TypeChar('é')
+	if st := c.Screen(); st.Inhibited {
+		t.Fatalf("alpha-only field rejected 'é' with %04X", st.ErrorCode)
+	}
+}
+
+// TestSetMDTWithoutFirstSubfield: continued middle/last sub-fields with no
+// continued-first one (a malformed host screen) must not make setMDT walk
+// the circular field list forever.
+func TestSetMDTWithoutFirstSubfield(t *testing.T) {
+	db := &dbuffer{}
+	mid := &field{continuous: true, continuedMiddle: true}
+	last := &field{continuous: true, continuedLast: true}
+	db.addField(mid)
+	db.addField(last)
+	done := make(chan struct{})
+	go func() { last.setMDT(db); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("setMDT loops forever without a continued-first sub-field")
+	}
+	if !last.mdt() || !db.masterMDT {
+		t.Error("the typed-into sub-field is not marked modified")
+	}
+}
+
+// TestSetMDTMarksFirstSubfield: typing into a later sub-field marks the
+// first one, which carries the whole field to the host.
+func TestSetMDTMarksFirstSubfield(t *testing.T) {
+	db := &dbuffer{}
+	plain := &field{}
+	first := &field{continuous: true, continuedFirst: true}
+	mid := &field{continuous: true, continuedMiddle: true}
+	last := &field{continuous: true, continuedLast: true}
+	for _, f := range []*field{plain, first, mid, last} {
+		db.addField(f)
+	}
+	last.setMDT(db)
+	if !first.mdt() || last.mdt() || mid.mdt() || plain.mdt() {
+		t.Errorf("mdt plain=%v first=%v mid=%v last=%v, want only first",
+			plain.mdt(), first.mdt(), mid.mdt(), last.mdt())
 	}
 }

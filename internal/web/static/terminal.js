@@ -53,6 +53,13 @@ const hostInput = document.getElementById('host-input');
 const portInput = document.getElementById('port-input');
 hostInput.value = settings.host !== undefined ? settings.host : defaults.host;
 portInput.value = settings.port !== undefined ? settings.port : String(defaults.port);
+if (defaults.locked) {
+  // the server connects only to its own host: show it, not editable
+  hostInput.value = defaults.host;
+  portInput.value = String(defaults.port);
+  hostInput.disabled = portInput.disabled = true;
+  hostInput.title = portInput.title = 'This server is locked to this host';
+}
 hostInput.addEventListener('change', () => saveSetting('host', hostInput.value.trim()));
 portInput.addEventListener('change', () => saveSetting('port', portInput.value.trim()));
 
@@ -370,8 +377,11 @@ connectBtn.onclick = () => {
   }
   if (!poweredOn) powerOn();
   // remember the last host used, even if typed without leaving the field
-  saveSetting('host', hostInput.value.trim());
-  saveSetting('port', portInput.value.trim());
+  // (not the host a locked server imposes)
+  if (!defaults.locked) {
+    saveSetting('host', hostInput.value.trim());
+    saveSetting('port', portInput.value.trim());
+  }
   send({
     type: 'connect',
     host: hostInput.value,
@@ -423,8 +433,28 @@ function redraw() {
 let downAt = null;
 const CLICK_SLOP_PX = 5;
 
+// The click that brings the window (or the screen) into focus only
+// focuses: it must not move the cursor, or the cursor would land wherever
+// the mouse happened to be (typing then fails with 0005). focusClick is
+// set when the window loses the focus and cleared shortly after it comes
+// back, so a window focused from the keyboard (Cmd+Tab) does not swallow
+// a later, deliberate click.
+let focusClick = !document.hasFocus();
+let focusTimer = null;
+window.addEventListener('blur', () => {
+  clearTimeout(focusTimer); // a pending clear belongs to the old focus
+  focusClick = true;
+});
+window.addEventListener('focus', () => {
+  clearTimeout(focusTimer);
+  focusTimer = setTimeout(() => { focusClick = false; }, 300);
+});
+let clickFocuses = false; // the current mousedown was a focus click
+
 canvas.addEventListener('mousedown', (ev) => {
   if (ev.button !== 0) return;
+  clickFocuses = focusClick || document.activeElement !== canvas;
+  focusClick = false;
   const cell = cellAt(ev);
   if (!cell) return;
   downAt = { x: ev.clientX, y: ev.clientY };
@@ -446,9 +476,9 @@ window.addEventListener('mouseup', (ev) => {
   selecting = false;
   const still = downAt && Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) < CLICK_SLOP_PX;
   if (sel && (still || (sel.a.r === sel.b.r && sel.a.c === sel.b.c))) {
-    // a click (no drag): move the cursor there; the host side ignores
-    // clicks outside input fields and on the status row
-    if (hostConnected && lastScreen && sel.a.r < lastScreen.rows - 1) {
+    // a click (no drag): move the cursor there, except on the status
+    // row and for the click that only focused the screen
+    if (hostConnected && lastScreen && sel.a.r < lastScreen.rows - 1 && !clickFocuses) {
       send({ type: 'cursor', row: sel.a.r, col: sel.a.c });
     }
     sel = null;

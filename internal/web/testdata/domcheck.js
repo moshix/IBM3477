@@ -7,7 +7,7 @@ const el = () => ({ value: '', options: [], style: {}, classList: { contains: ()
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || el()), createElement: () => el(),
   addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
-  body: { appendChild() {}, removeChild() {} }, activeElement: null };
+  body: { appendChild() {}, removeChild() {} }, activeElement: null, hasFocus: () => true };
 global.window = { addEventListener() {}, innerHeight: 800, isSecureContext: true };
 global.navigator = { platform: 'MacIntel', userAgent: 'test' };
 // argv[3] (optional): JSON object preloaded into localStorage

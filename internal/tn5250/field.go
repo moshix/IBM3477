@@ -2,6 +2,8 @@
 
 package tn5250
 
+import "unicode"
+
 // field is the Go port of lib5250's Tn5250Field (field.c / field.h). It manages
 // one input/output field on the display. It does NOT hold the field's character
 // data — that lives in the display buffer; the field only records its position,
@@ -109,20 +111,26 @@ func (f *field) isRightBlank() bool   { return f.mandFillType() == FieldRightBla
 // setMDT sets this field's Modified flag and the owning buffer's master MDT.
 // Continued (word-wrap) fields propagate the flag to the first sub-field, as in
 // tn5250_field_set_mdt.
+//
+// The walk back to the first sub-field stops at a non-continued field or
+// when it comes round to f again: a host can send middle/last sub-fields
+// without a first one, and the circular list would otherwise loop forever
+// (with the client lock held). Without a first sub-field, f is marked.
 func (f *field) setMDT(db *dbuffer) {
 	if f.continuous && !f.continuedFirst {
-		iter := f.prev
-		for iter.continuous && !iter.continuedFirst {
-			iter = iter.prev
+		for iter := f.prev; iter != nil && iter != f && iter.continuous; iter = iter.prev {
+			if iter.continuedFirst {
+				iter.ffw |= FieldModified
+				db.masterMDT = true
+				return
+			}
 		}
-		iter.setMDT(db)
-		return
 	}
 	f.ffw |= FieldModified
 	db.masterMDT = true
 }
 
-// validChar reports whether ch (a local/ASCII character) is valid for this
+// validChar reports whether ch (a Unicode character) is valid for this
 // field type, ported from tn5250_field_valid_char. On failure it returns the
 // keyboard SRC to report.
 func (f *field) validChar(ch int) (ok bool, src int) {
@@ -130,7 +138,9 @@ func (f *field) validChar(ch int) (ok bool, src int) {
 	case FieldAlphaShift:
 		return true, KBDSrcNone
 	case FieldAlphaOnly:
-		if !(isAlpha(ch) || ch == ',' || ch == '.' || ch == '-' || ch == ' ') {
+		// letters beyond ASCII (é, ä, ß) are letters too
+		letter := isAlpha(ch) || (ch >= 0x80 && unicode.IsLetter(rune(ch)))
+		if !(letter || ch == ',' || ch == '.' || ch == '-' || ch == ' ') {
 			return false, KBDSrcAlphaOnly
 		}
 		return true, KBDSrcNone

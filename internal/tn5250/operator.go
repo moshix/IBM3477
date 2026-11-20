@@ -90,11 +90,11 @@ func (c *Client) TypeChar(r rune) {
 		if f.isMonocase() {
 			r = unicode.ToUpper(r)
 		}
-		if r < 0x80 {
-			if ok, src := f.validChar(int(r)); !ok {
-				c.operatorError(src)
-				return
-			}
+		// every character, not only ASCII: a pasted 'é' must not get into
+		// a numeric field
+		if ok, src := f.validChar(int(r)); !ok {
+			c.operatorError(src)
+			return
 		}
 		e := d.cmap.toRemoteRune(r)
 		data := d.fieldData(f)
@@ -258,18 +258,14 @@ func (c *Client) Key(name string) {
 }
 
 // MoveCursor puts the cursor at row, col (0-based), as a click with a
-// pointing device does. Only positions inside an input (non-bypass)
-// field are accepted; others, and positions off the screen, are ignored.
+// pointing device does; positions outside the screen are ignored. The
+// cursor may go anywhere, protected text included: Help, F4 prompting
+// and cursor-sensitive screens act on where the cursor is. (The browser
+// does not send the click that only brings the window to the front.)
 func (c *Client) MoveCursor(row, col int) {
 	c.withSession(func() {
 		d := c.disp
 		if row < 0 || col < 0 || row >= d.height() || col >= d.width() {
-			return
-		}
-		// only into an input field: a click elsewhere (e.g. the click
-		// that brings the browser window to the front) would leave the
-		// cursor where typing fails with 0005 and AID keys go astray
-		if f := d.fieldAt(row, col); f == nil || f.isBypass() {
 			return
 		}
 		d.setCursor(row, col)
@@ -277,14 +273,18 @@ func (c *Client) MoveCursor(row, col int) {
 }
 
 // withSession runs fn under the client lock when connected, then publishes
-// a snapshot to the update callback.
+// a snapshot to the update callback. A panic in fn ends the session (see
+// guarded) instead of the process.
 func (c *Client) withSession(fn func()) {
 	c.mu.Lock()
 	if c.sess == nil {
 		c.mu.Unlock()
 		return
 	}
-	fn()
+	if !c.guarded(fn) {
+		c.mu.Unlock()
+		return
+	}
 	snap := c.buildSnapshot()
 	c.mu.Unlock()
 	if c.cb != nil {

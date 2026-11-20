@@ -130,6 +130,18 @@ The two programs are:
 ./bin/appwebibm3477 -no-browser     # just print the URL (e.g. over ssh -L)
 ```
 
+On a server open to the internet, start `webibm3477` with `-lock`.
+Otherwise any visitor can make the server open TCP connections to any
+host and port, including addresses on its internal network. With
+`-lock`, every terminal connects only to `-host`:`-port`, and `-host`
+must be given explicitly. The page shows that host and port and does
+not let visitors change them. `appwebibm3477` has no `-lock`: it only
+serves the local computer.
+
+```sh
+./bin/webibm3477 -listen :8050 -host pub400.com -port 23 -lock
+```
+
 In the page you choose the terminal model (3477 or 3486), switch it on,
 and enter the host, port and screen size. The screen size is the
 terminal type the TN5250 session announces to the host:

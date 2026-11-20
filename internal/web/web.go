@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,10 @@ type Config struct {
 	Port    int    // default TN5250 port
 	Version string // build version shown in the page
 	HostTLS bool   // connect to the TN5250 host over TLS
+	// Lock restricts connections to Host:Port: the host and port the
+	// browser sends are ignored, so visitors of a public server cannot
+	// make it open connections to other (e.g. internal) addresses.
+	Lock bool
 	// ExtraHead is HTML inserted before </head> (the desktop app adds its
 	// tab-presence script here).
 	ExtraHead string
@@ -69,6 +74,7 @@ type pageDefaults struct {
 	Host    string `json:"host"`
 	Port    int    `json:"port"`
 	Version string `json:"version"`
+	Locked  bool   `json:"locked,omitempty"` // host and port fixed by the server
 }
 
 // Page returns index.html with the server defaults injected as a JS
@@ -86,6 +92,7 @@ func (s *Server) Page(w http.ResponseWriter, r *http.Request) {
 	// json.Marshal escapes <, > and & so the values cannot end the script
 	defaults, _ := json.Marshal(pageDefaults{
 		Model: s.cfg.Model, Host: s.cfg.Host, Port: s.cfg.Port, Version: s.cfg.Version,
+		Locked: s.cfg.Lock,
 	})
 	inject := "<script>window.WEBTWINAX_DEFAULTS=" + string(defaults) + ";</script>" +
 		s.cfg.ExtraHead + "</head>"
@@ -321,6 +328,10 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 			}
 			hangUp()
 			mach.Attach(nil)
+			if s.cfg.Lock {
+				// only the server's own host: never what the browser sent
+				m.Host, m.Port = s.cfg.Host, strconv.Itoa(s.cfg.Port)
+			}
 			target := net.JoinHostPort(m.Host, m.Port)
 			must(serverMsg{Type: "status", Text: "Connecting to " + target + " as " + tt})
 			cl := tn5250.NewClient(strings.TrimPrefix(tt, "IBM-"), m.Codepage) // "" = 37

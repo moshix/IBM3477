@@ -11,6 +11,8 @@ type IOGA struct {
 	known [0x100]bool
 	kbd   kbdPort
 	snd   sound // speaker registers 0x20010/11 (sound.go)
+	// prn is the printer port 0x20030/31 (printer.go)
+	prn printerPort
 	// videoIRQ is the video range engine's completion request (vector
 	// 0Ch), cleared by writing 0x20136 (video.go)
 	videoIRQ bool
@@ -52,11 +54,14 @@ const (
 func newIOGA(b *Board) *IOGA {
 	g := &IOGA{b: b}
 	g.kbd.kbd.powerOn() // the keyboard announces itself at power-on
+	// a printer is attached, on line and ready
+	g.prn.status = prnReady
 	g.regs[strapReg] = b.Model.Straps
 	for _, r := range []int{regChannel, regChannel + 1, regTwinaxStatus,
 		regTwinaxStatus + 1, regMask, regMask + 1, regStationAddr,
 		regTwinaxCtl, strapReg, regKbdData, regKbdCtl, regKbdAck,
-		regIntEnable, regWrapMode, regWrapResult, regSound, regClick} {
+		regIntEnable, regWrapMode, regWrapResult, regSound, regClick,
+		regPrnData, regPrnCtl} {
 		g.known[r] = true
 	}
 	return g
@@ -71,6 +76,8 @@ func (g *IOGA) Read(off uint32) uint8 {
 		return g.kbd.status()
 	case regChannel, regChannel + 1:
 		return 0 // channel idle
+	case regPrnCtl:
+		return g.prn.status
 	}
 	if !g.known[off] {
 		g.b.trace(mmioBase+off, false, 0)
@@ -95,6 +102,8 @@ func (g *IOGA) Write(off uint32, v uint8) {
 		g.kbd.ack()
 	case regSound, regClick:
 		g.snd.write(off, v)
+	case regPrnData, regPrnCtl:
+		g.prn.write(off, v)
 	}
 	if g.b.Twinax.write(off, v) {
 		return

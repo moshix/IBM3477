@@ -299,6 +299,12 @@ function open() {
       if (m.lines) screenLines = m.lines;
       drawScreen(m.rows, m.cols, b64(m.cells));
       statusLED.textContent = 'LED ' + m.led.toString(16).toUpperCase().padStart(2, '0');
+    } else if (m.type === 'printjob') {
+      onPrintJob(m);
+    } else if (m.type === 'printers') {
+      onPrinters(m);
+    } else if (m.type === 'jobfile') {
+      onJobFile(m);
     } else if (m.type === 'sound') {
       playSound(m);
     } else if (m.type === 'traffic') {
@@ -346,7 +352,8 @@ function setPowered(on) {
 }
 
 function powerOn() {
-  send({ type: 'power', model: modelSelect.value, codepage: codepageSelect.value });
+  send({ type: 'power', model: modelSelect.value, codepage: codepageSelect.value,
+    printKey: printKeySelect.value });
   canvas.focus();
 }
 
@@ -615,10 +622,10 @@ const DEFAULT_KEYMAP = {
 // Every key of the 5250 keyboard that can be mapped: web5250's list plus
 // the 122-key keys a 3477 keyboard has that web5250 does not map.
 const ALL_FUNCTIONS = [
-  'Enter', 'NewLine',
+  'Enter', 'Print', 'NewLine',
   'PF1', 'PF2', 'PF3', 'PF4', 'PF5', 'PF6', 'PF7', 'PF8', 'PF9', 'PF10', 'PF11', 'PF12',
   'PF13', 'PF14', 'PF15', 'PF16', 'PF17', 'PF18', 'PF19', 'PF20', 'PF21', 'PF22', 'PF23', 'PF24',
-  'Help', 'RollUp', 'RollDown', 'Print', 'SysReq', 'TestReq', 'Attn',
+  'Help', 'RollUp', 'RollDown', 'SysReq', 'TestReq', 'Attn',
   'Clear', 'FieldExit', 'FieldPlus', 'FieldMinus', 'Dup',
   'Reset', 'EraseEOF', 'ErInp', 'Home', 'Insert', 'Delete', 'BackTab',
   'CrSel', 'Hex', 'FieldMark', 'Rule', 'Jump', 'Setup', 'Record', 'Play',
@@ -635,7 +642,7 @@ const FUNCTION_DESCRIPTIONS = {
   'Help': 'Help',
   'RollUp': 'Page Down - show more (the "More..." prompt)',
   'RollDown': 'Page Up - show the previous page',
-  'Print': 'Print the screen',
+  'Print': 'Print key: print the screen (Settings › Print key: local copy or host)',
   'SysReq': 'System Request',
   'TestReq': 'Test Request',
   'Attn': 'Attention',
@@ -1085,6 +1092,165 @@ function playSound(m) {
   }
   if (m.tone) toneOn(m.volume || 0); else toneOff();
 }
+
+// ── Print jobs ──────────────────────────────────────────────────────
+//
+// In Display-Printer mode the terminal prints through its printer port;
+// the server turns that into print jobs ("printjob"). The page offers to
+// save a job (PDF or text), to print it on one of the server computer's
+// printers (CUPS; "printers"), or to open the PDF in a new tab for the
+// browser's own print dialog. Settings > Print jobs (or "Do this every
+// time") makes one of them automatic.
+const printOverlay = document.getElementById('print-overlay');
+const printAction = document.getElementById('print-action');
+const printPrinter = document.getElementById('print-printer');
+const printName = document.getElementById('print-name');
+let printJob = null;       // the job shown in the dialog: {job, pages, name}
+const pendingFiles = {};   // "job/format" -> {handle} | {win} | {name}
+let localPrinters = false; // the server offers its printers
+
+function addPrinterOption(sel, value, label) {
+  if ([...sel.options].some((o) => o.value === value)) return;
+  const o = document.createElement('option');
+  o.value = value;
+  o.textContent = label;
+  sel.appendChild(o);
+}
+if (settings.printAction) {
+  if (settings.printAction.startsWith('printer:')) {
+    addPrinterOption(printAction, settings.printAction, 'Print on ' + settings.printAction.slice(8));
+  }
+  printAction.value = settings.printAction;
+}
+printAction.addEventListener('change', () => saveSetting('printAction', printAction.value));
+
+// What the Print key does in Display-Printer mode: a local copy on the
+// terminal's printer, or a print request to the host.
+const printKeySelect = document.getElementById('print-key');
+if (settings.printKey === 'local' || settings.printKey === 'host') printKeySelect.value = settings.printKey;
+printKeySelect.addEventListener('change', () => {
+  saveSetting('printKey', printKeySelect.value);
+  send({ type: 'printkey', printKey: printKeySelect.value });
+});
+
+function onPrinters(m) {
+  localPrinters = !!m.local && (m.printers || []).length > 0;
+  printPrinter.innerHTML = '';
+  for (const name of m.printers || []) {
+    addPrinterOption(printPrinter, name, name);
+    addPrinterOption(printAction, 'printer:' + name, 'Print on ' + name);
+  }
+  if (m.defaultPrinter) printPrinter.value = m.defaultPrinter;
+  document.getElementById('print-local-row').style.display = localPrinters ? '' : 'none';
+}
+
+function onPrintJob(m) {
+  const act = printAction.value;
+  if (act === 'pdf' || act === 'txt') {
+    requestFile(m.job, act, null, m.name); // no click: a plain download
+  } else if (act.startsWith('printer:')) {
+    send({ type: 'jobprint', job: m.job, printer: act.slice(8) });
+  } else {
+    // "ask", and "browser" (a new tab needs a click: ask instead)
+    showPrintDialog(m);
+  }
+  statusText.textContent = 'Print job: ' + m.pages + (m.pages === 1 ? ' page' : ' pages');
+}
+
+function showPrintDialog(m) {
+  printJob = m;
+  document.getElementById('print-info').textContent =
+    m.pages + (m.pages === 1 ? ' page' : ' pages') + ' printed by the terminal.';
+  printName.value = m.name;
+  // with the system Save dialog the name is chosen there
+  document.getElementById('print-name-row').style.display = window.showSaveFilePicker ? 'none' : '';
+  document.getElementById('print-always').checked = false;
+  send({ type: 'printers' });
+  printOverlay.classList.add('visible');
+}
+
+function closePrintDialog(remember) {
+  if (remember && document.getElementById('print-always').checked) {
+    if (remember.startsWith('printer:')) {
+      addPrinterOption(printAction, remember, 'Print on ' + remember.slice(8));
+    }
+    printAction.value = remember;
+    saveSetting('printAction', remember);
+  }
+  printOverlay.classList.remove('visible');
+  printJob = null;
+  canvas.focus();
+}
+
+// requestFile asks the server for a job as PDF or text; handle is a file
+// from the system Save dialog (or null: download under name).
+function requestFile(job, format, target, name) {
+  pendingFiles[job + '/' + format] = target || { name: name + '.' + format };
+  send({ type: 'jobfile', job: job, format: format });
+}
+
+function saveJob(format) {
+  const m = printJob;
+  const name = (printName.value || m.name).replace(/[\/:*?"<>|]/g, '_');
+  closePrintDialog(format);
+  if (window.showSaveFilePicker) {
+    // the system Save dialog: the user names the file and picks the folder
+    const types = format === 'pdf'
+      ? [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }]
+      : [{ description: 'Text', accept: { 'text/plain': ['.txt'] } }];
+    window.showSaveFilePicker({ suggestedName: name + '.' + format, types: types })
+      .then((handle) => requestFile(m.job, format, { handle: handle }))
+      .catch(() => {}); // cancelled
+  } else {
+    requestFile(m.job, format, null, name);
+  }
+}
+
+function onJobFile(m) {
+  const key = m.job + '/' + m.format;
+  const target = pendingFiles[key];
+  delete pendingFiles[key];
+  if (!target) return;
+  const type = m.format === 'pdf' ? 'application/pdf' : 'text/plain;charset=utf-8';
+  const blob = new Blob([b64(m.data)], { type: type });
+  if (target.handle) {
+    target.handle.createWritable()
+      .then((w) => w.write(blob).then(() => w.close()))
+      .then(() => { statusText.textContent = 'Saved ' + target.handle.name; })
+      .catch((e) => { statusText.textContent = 'Save failed: ' + e.message; });
+  } else if (target.win) {
+    target.win.location = URL.createObjectURL(blob); // the browser's PDF viewer
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = target.name || m.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    statusText.textContent = 'Downloaded ' + a.download;
+  }
+}
+
+document.getElementById('print-save-pdf').onclick = () => saveJob('pdf');
+document.getElementById('print-save-txt').onclick = () => saveJob('txt');
+document.getElementById('print-go').onclick = () => {
+  const m = printJob;
+  const prn = printPrinter.value;
+  closePrintDialog('printer:' + prn);
+  if (m && prn) send({ type: 'jobprint', job: m.job, printer: prn });
+};
+document.getElementById('print-browser').onclick = () => {
+  const m = printJob;
+  // open the tab during the click (pop-up blockers), fill it when the
+  // PDF arrives
+  const win = window.open('', '_blank');
+  closePrintDialog('browser');
+  if (m) requestFile(m.job, 'pdf', win ? { win: win } : null, m.name);
+};
+document.getElementById('print-discard').onclick = () => {
+  if (printJob) send({ type: 'jobdrop', job: printJob.job });
+  closePrintDialog(null);
+};
 
 // Toolbar buttons must not keep the keyboard focus: Space or Enter typed
 // for the terminal would press them again (e.g. Disconnect).

@@ -104,6 +104,10 @@ func asciiToEBCDIC(r rune) uint8 {
 		return 0xA2 + uint8(r-'s')
 	case r >= 'A' && r <= 'I':
 		return 0xC1 + uint8(r-'A')
+	case r >= 'J' && r <= 'R':
+		return 0xD1 + uint8(r-'J')
+	case r >= 'S' && r <= 'Z':
+		return 0xE2 + uint8(r-'S')
 	case r >= '0' && r <= '9':
 		return 0xF0 + uint8(r-'0')
 	case r == '.':

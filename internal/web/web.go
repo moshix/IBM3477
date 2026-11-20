@@ -22,6 +22,7 @@ import (
 
 	"ibm3486/internal/board"
 	"ibm3486/internal/emu"
+	"ibm3486/internal/printer"
 	"ibm3486/internal/tn5250"
 )
 
@@ -43,6 +44,10 @@ type Config struct {
 	// ExtraHead is HTML inserted before </head> (the desktop app adds its
 	// tab-presence script here).
 	ExtraHead string
+	// LocalPrinters lets the page print jobs on this computer's printers
+	// (CUPS). Off for a locked public server: visitors must not print
+	// on the server's printers. Saving a job as a file always works.
+	LocalPrinters bool
 }
 
 // Server serves the terminal page and its WebSocket.
@@ -103,7 +108,7 @@ func (s *Server) Page(w http.ResponseWriter, r *http.Request) {
 
 // clientMsg is a message from the browser.
 type clientMsg struct {
-	Type  string `json:"type"` // "power", "poweroff", "key", "paste", "cursor", "connect", "disconnect"
+	Type  string `json:"type"` // "power", "poweroff", "key", "paste", "cursor", "connect", "disconnect", "printers", "jobfile", "jobprint", "jobdrop", "printkey"
 	Model string `json:"model,omitempty"`
 	Code  string `json:"code,omitempty"` // KeyboardEvent.code
 	Down  bool   `json:"down,omitempty"`
@@ -117,11 +122,20 @@ type clientMsg struct {
 	// Row, Col: screen cell clicked ("cursor"), 0-based
 	Row int `json:"row,omitempty"`
 	Col int `json:"col,omitempty"`
+	// Job, Format, Printer: print job requests ("jobfile": Format "pdf"
+	// or "txt"; "jobprint": on Printer; "jobdrop")
+	Job     int    `json:"job,omitempty"`
+	Format  string `json:"format,omitempty"`
+	Printer string `json:"printer,omitempty"`
+	// PrintKey is what the Print key does in Display-Printer mode:
+	// "local" (a copy on the terminal's printer) or "host" ("power",
+	// "printkey")
+	PrintKey string `json:"printKey,omitempty"`
 }
 
 // serverMsg is a message to the browser.
 type serverMsg struct {
-	Type  string `json:"type"` // "screen", "font", "status", "traffic", "sound"
+	Type  string `json:"type"` // "screen", "font", "status", "traffic", "sound", "printjob", "printers", "jobfile"
 	Rows  int    `json:"rows,omitempty"`
 	Cols  int    `json:"cols,omitempty"`
 	CellW int    `json:"cellw,omitempty"` // dots per character cell
@@ -144,6 +158,18 @@ type serverMsg struct {
 	Tone   bool   `json:"tone,omitempty"`
 	Volume int    `json:"volume,omitempty"`
 	Clicks uint32 `json:"clicks,omitempty"`
+	// Print jobs: a finished job ("printjob": Job, Pages, Name), a job
+	// file ("jobfile": Job, Format, Name, Data base64), this computer's
+	// printers ("printers": Printers, DefaultPrinter; Local false when
+	// printing here is not offered)
+	Job            int      `json:"job,omitempty"`
+	Pages          int      `json:"pages,omitempty"`
+	Name           string   `json:"name,omitempty"`
+	Format         string   `json:"format,omitempty"`
+	Data           string   `json:"data,omitempty"`
+	Printers       []string `json:"printers,omitempty"`
+	DefaultPrinter string   `json:"defaultPrinter,omitempty"`
+	Local          bool     `json:"local,omitempty"`
 }
 
 // terminalTypes maps a screen size to the TN5250 terminal type announced
@@ -236,6 +262,10 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 
 	var mach *emu.Machine
 	curModel := s.cfg.Model
+	var jobs jobStore // this session's print jobs (print.go)
+	// printWG: lp runs in goroutines that report with must(); they are
+	// waited for before out is closed
+	var printWG sync.WaitGroup
 	// The TN5250 host session runs in its own goroutine (sessWG); it is
 	// disconnected and waited for before out is closed.
 	var host *tn5250.Client
@@ -252,6 +282,7 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 		if mach != nil {
 			mach.Stop() // waits for the machine goroutine: no more sends
 		}
+		printWG.Wait() // and for print commands still running
 		close(out)
 		wg.Wait()
 	}()
@@ -289,6 +320,11 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			nm.SetCodepage(m.Codepage) // decodes the screen for copying
+			nm.SetPrintKeyToHost(m.PrintKey == "host")
+			nm.SetPrintHandler(func(doc *printer.Document) {
+				j := jobs.add(doc)
+				must(serverMsg{Type: "printjob", Job: j.id, Pages: len(doc.Pages), Name: j.name})
+			})
 			mach, curModel = nm, mdl
 			must(serverMsg{Type: "status", Text: "IBM " + mdl + " powered on"})
 			var lastSound board.Sound
@@ -329,6 +365,41 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 			// controller then moves the terminal's cursor)
 			if host != nil {
 				host.MoveCursor(m.Row, m.Col)
+			}
+		case "printers":
+			msg := serverMsg{Type: "printers", Local: s.cfg.LocalPrinters}
+			if s.cfg.LocalPrinters {
+				msg.Printers, msg.DefaultPrinter = listPrinters()
+			}
+			must(msg)
+		case "jobfile":
+			if j := jobs.get(m.Job); j != nil {
+				data, name := jobFile(j, m.Format)
+				must(serverMsg{Type: "jobfile", Job: j.id, Format: m.Format, Name: name, Data: encodeFile(data)})
+			}
+		case "jobprint":
+			j := jobs.get(m.Job)
+			switch {
+			case j == nil:
+			case !s.cfg.LocalPrinters:
+				must(serverMsg{Type: "status", Text: "Printing on this computer is not offered"})
+			default:
+				// lp can take a moment: report from a goroutine
+				printWG.Add(1)
+				go func(j *printJob, prn string) {
+					defer printWG.Done()
+					if err := printJobOn(j, prn); err != nil {
+						must(serverMsg{Type: "status", Text: fit79("Print failed: " + err.Error())})
+						return
+					}
+					must(serverMsg{Type: "status", Text: fit79("Printed " + j.name + " on " + prn)})
+				}(j, m.Printer)
+			}
+		case "jobdrop":
+			jobs.drop(m.Job)
+		case "printkey":
+			if mach != nil {
+				mach.SetPrintKeyToHost(m.PrintKey == "host")
 			}
 		case "key":
 			if mach != nil {

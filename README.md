@@ -185,6 +185,7 @@ finishes POST and starts its run-time driver.
 - [TWINAX.md](TWINAX.md): the twinax station engine and the emulated
   workstation controller.
 - [NVRAM.md](NVRAM.md): the non-volatile setup memory and its format.
+- [PRINTER.md](PRINTER.md): the printer port, its data, and printing.
 
 The terminal's setup is kept in `~/.config/ibm3477/nvram.bin` (or
 `$XDG_CONFIG_HOME/ibm3477/nvram.bin`). It is created on first start
@@ -235,6 +236,34 @@ two ways:
   does;
 - its first data record lacks the 5250 record header (type 12A0), as a
   3270 Erase/Write does.
+
+### Printing
+
+While connected to a host, the **Print key** (Ctrl+P by default) prints
+a copy of the screen (Settings › Print key: "Local copy"), or asks the
+host to print it ("Send to host").
+- With Terminal Mode **Display-Printer** in the terminal's Setup (and a
+  Printer Address different from the display's), the copy goes to the
+  terminal's own printer: the 3477 formats it with its Setup Printer
+  choices and sends it to its printer (IBM Proprinter commands). The
+  emulator collects that; when the printer has been quiet for 2 seconds
+  the print job is ready. Print jobs the host sends to that printer will
+  print the same way (planned).
+- In the other modes the emulator makes the print job from the screen
+  directly (10 characters, 6 lines per inch).
+
+The page then shows the print job:
+- **Save as PDF / text:** in Chrome and Brave you name the file and
+  choose the folder; other browsers download it.
+- **Print on:** one of this computer's printers (CUPS on macOS and
+  Linux). `webibm3477 -lock` does not offer the server's printers.
+- **Open PDF to print:** a new tab with the PDF and the browser's own
+  print dialog.
+
+Settings › Print jobs (or "Do this every time") makes one of these
+automatic. The Setup Printer choices (lines and characters per inch,
+quality, character height) shape the output, as on a real 3477; see
+PRINTER.md.
 
 ### Mouse, copy and paste
 

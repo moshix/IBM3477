@@ -89,6 +89,22 @@
           </select>
           <span class="settings-hint">(next connect)</span>
         </span>
+        <span class="settings-item">
+          <label for="print-key">Print key:</label>
+          <select id="print-key">
+            <option value="local" selected>Local copy (terminal's printer)</option>
+            <option value="host">Send to host</option>
+          </select>
+        </span>
+        <span class="settings-item">
+          <label for="print-action">Print jobs:</label>
+          <select id="print-action">
+            <option value="ask" selected>Ask each time</option>
+            <option value="pdf">Save as PDF</option>
+            <option value="txt">Save as text</option>
+            <option value="browser">Open PDF to print</option>
+          </select>
+        </span>
       </div>
     </div>
     <div class="settings-section">
@@ -102,6 +118,32 @@
     <div class="modal-buttons">
       <button id="btn-keymap-reset">Reset Defaults</button>
       <button class="primary" id="btn-settings-done">Close</button>
+    </div>
+  </div>
+</div>
+<!-- Print job dialog: the terminal printed (Display-Printer mode) -->
+<div id="print-overlay">
+  <div id="print-modal">
+    <h2>Print job ready</h2>
+    <p id="print-info"></p>
+    <div class="print-row">
+      <button id="print-save-pdf" class="primary">Save as PDF&hellip;</button>
+      <button id="print-save-txt">Save as text&hellip;</button>
+      <span id="print-name-row">File name:
+        <input type="text" id="print-name" size="28"></span>
+    </div>
+    <div class="print-row" id="print-local-row">
+      <label for="print-printer">Print on:</label>
+      <select id="print-printer"></select>
+      <button id="print-go">Print</button>
+    </div>
+    <div class="print-row">
+      <button id="print-browser">Open PDF to print</button>
+      <button id="print-discard">Discard</button>
+    </div>
+    <div class="print-row">
+      <input type="checkbox" id="print-always">
+      <label for="print-always">Do this every time (change in Settings)</label>
     </div>
   </div>
 </div>

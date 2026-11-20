@@ -566,3 +566,12 @@ func TestLockedServerIgnoresBrowserHost(t *testing.T) {
 		t.Fatal("the locked host never saw the connection")
 	}
 }
+
+// TestPrintKeyMappable: the Print key is near the top of the key mapping
+// list in Settings.
+func TestPrintKeyMappable(t *testing.T) {
+	js, _ := staticFiles.ReadFile("static/terminal.js")
+	if !strings.Contains(string(js), "  'Enter', 'Print', 'NewLine',") {
+		t.Error("Print is not at the top of the mappable keys")
+	}
+}

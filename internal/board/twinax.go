@@ -59,12 +59,35 @@ type twinaxChan struct {
 // cmdEndOfQueue is the twinax End of Queue command.
 const cmdEndOfQueue = 0x62
 
+// Printer station commands that end a transfer (5250 attachment manual,
+// chapter 3): Write Data must be the last command of its queue (p.100),
+// and after Activate Write "busy status is returned until post-activate
+// processing is complete" (p.102).
+const (
+	cmdPrnWriteData     = 0x1E
+	cmdPrnActivateWrite = 0x01
+)
+
+// endsTransfer reports whether the station stays busy after cmd until
+// the firmware re-arms its receiver: End of Queue, and for a printer
+// station Write Data and Activate Write. Without that, a controller sent
+// the next 256-byte print block while the 3477 was still formatting the
+// previous one, and print data was lost.
+func endsTransfer(cmd uint8) bool {
+	return cmd == cmdEndOfQueue || cmd == cmdPrnWriteData || cmd == cmdPrnActivateWrite
+}
+
 // Response is what a station sent back to the controller for one message.
 type Response struct {
 	Polled bool    // a poll response was produced
 	Status uint8   // poll response status byte
 	Scan   uint8   // poll response data byte (+D: keyboard scan code)
 	Data   []uint8 // Read Activate data
+	// Frame2 is the second poll response frame as sent, whether or not
+	// it is new: for a printer station it is status byte 2 (receive
+	// buffers full, print complete, cancel request, ...), which is
+	// current on every poll, unlike a display's key code.
+	Frame2 uint8
 }
 
 func newTwinax(b *Board) *Twinax { return &Twinax{b: b} }
@@ -87,7 +110,7 @@ func (t *Twinax) Deliver(addr, cmd uint8, data []uint8) (Response, bool) {
 		enable := uint8(0x02) << uint(c)
 		if ctl&enable != 0 && t.stationAddr(c) == addr {
 			resp := t.run(c, cmd, data, false)
-			if cmd == cmdEndOfQueue {
+			if endsTransfer(cmd) {
 				t.ch[c].rearm = true
 			}
 			return resp, true
@@ -188,7 +211,9 @@ func (t *Twinax) run(c int, cmd uint8, data []uint8, badParity bool) Response {
 				ch.unacked = true
 				ch.settle = false // reported busy on this poll
 			}
-			resp.Polled, resp.Status = true, st
+			// frame 2 as the firmware keeps it in the control block
+			// (+D); channel 1's poll program does not load it into h7
+			resp.Polled, resp.Status, resp.Frame2 = true, st, mem[blk+0x0D]
 			if ch.fresh {
 				resp.Scan = h[7]
 			}

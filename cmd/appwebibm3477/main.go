@@ -88,6 +88,8 @@ func main() {
 	srv := web.New(web.Config{
 		Model: *model, RomDir: *romDir, Host: *host, Port: *port, Version: version, HostTLS: *hostTLS,
 		ExtraHead: presenceScript,
+		// the desktop app prints on the printers of the user's own computer
+		LocalPrinters: true,
 	})
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", srv.Page)

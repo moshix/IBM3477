@@ -53,9 +53,10 @@ type Machine struct {
 	stopOnce   sync.Once
 	done       sync.WaitGroup
 
-	// ctlCh hands a (new) workstation controller to the machine
-	// goroutine, which owns the board; nil detaches it.
-	ctlCh chan *controller.Controller
+	// hostQ hands a (new) host session to the machine goroutine, which
+	// owns the board and builds the workstation controller for it (with
+	// the terminal's setup addresses); nil detaches it.
+	hostQ chan controller.Host
 	ctl   *controller.Controller
 
 	// decode is the EBCDIC codepage table that decodes the screen for
@@ -70,6 +71,13 @@ type Machine struct {
 	// typing clicks. boardClicks is the firmware's click count last seen,
 	// mutedClicks those that fell into a paste (subtracted from Sound).
 	boardClicks, mutedClicks uint32
+
+	// prn collects printer output into print jobs (print.go)
+	prn printCollector
+	// prnStation drives the terminal's printer station in Display-Printer
+	// mode (nil otherwise); hostPrint: the Print key goes to the host
+	prnStation *controller.PrinterStation
+	hostPrint  hostPrintFlag
 }
 
 // New builds a terminal of the given model with ROMs from roms.
@@ -87,7 +95,7 @@ func New(model string, roms fs.FS) (*Machine, error) {
 		keys:  make(chan []uint8, 64),
 		paste: make(chan []pasteStep, 1),
 		stop:  make(chan struct{}),
-		ctlCh: make(chan *controller.Controller, 1),
+		hostQ: make(chan controller.Host, 1),
 	}
 	mach.SetCodepage("")
 	mach.nvPath = mach.loadNVRAM(model)
@@ -148,11 +156,11 @@ func (m *Machine) loop(update func(*Snapshot)) {
 		case codes := <-m.keys:
 			m.b.IO.Keyboard().Key(codes...)
 			continue
-		case ctl := <-m.ctlCh:
+		case host := <-m.hostQ:
 			if m.ctl != nil {
 				m.ctl.Shutdown() // clear its status-row indicators
 			}
-			m.ctl = ctl
+			m.attach(host) // print.go: display and printer stations
 			continue
 		case now := <-tick.C:
 			target := uint64(now.Sub(start).Seconds() * cpuHz)
@@ -265,7 +273,15 @@ func (m *Machine) run(cycles uint64) {
 		if m.ctl != nil {
 			m.ctl.Tick(int(n))
 		}
+		if m.ctl != nil {
+			// the Print key setting may change while connected
+			m.ctl.SetPrinter(m.prnStation, !m.hostPrint.Load())
+		}
+		if m.prnStation != nil {
+			m.prnStation.Tick(int(n))
+		}
 		m.mutePasteClicks()
+		m.collectPrint()
 		cycles -= n
 	}
 }
@@ -289,16 +305,11 @@ func (m *Machine) mutePasteClicks() {
 // through an emulated workstation controller (nil host detaches). Safe to
 // call from any goroutine.
 func (m *Machine) Attach(host controller.Host) {
-	var ctl *controller.Controller
-	if host != nil {
-		// station address unknown (terminal setup): search 0-6
-		ctl = controller.New(m.b.Twinax, -1, cpuHz/1000, host)
-	}
 	select {
-	case <-m.ctlCh: // replace a hand-over not yet picked up
+	case <-m.hostQ: // replace a hand-over not yet picked up
 	default:
 	}
-	m.ctlCh <- ctl
+	m.hostQ <- host
 }
 
 func btoi(b bool) int {

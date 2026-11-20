@@ -163,9 +163,31 @@ type Controller struct {
 	// missed counts polls in a row the station did not answer
 	missed int
 
+	// printer is the terminal's own printer station (Display-Printer
+	// mode), nil without one; with localCopy the Print key prints the
+	// screen on it instead of asking the host (SetPrinter)
+	printer   *PrinterStation
+	localCopy bool
+	// directPrint receives a local copy (SCS) when the terminal has no
+	// printer station (not Display-Printer mode); nil: Print goes to the
+	// host instead
+	directPrint func(scs []byte)
+
 	// Online reports whether the station answered the last poll.
 	Online bool
 }
+
+// SetPrinter attaches the terminal's printer station. With localCopy the
+// Print key prints a copy of the screen on it (as a controller does for
+// a display's own printer); otherwise Print goes to the host, which
+// prints the screen on its own printer device.
+func (c *Controller) SetPrinter(p *PrinterStation, localCopy bool) {
+	c.printer, c.localCopy = p, localCopy
+}
+
+// SetDirectPrint sets where a local copy goes when the terminal has no
+// printer station of its own: the emulator makes the print job itself.
+func (c *Controller) SetDirectPrint(f func(scs []byte)) { c.directPrint = f }
 
 // New returns a controller for the station at addr (0-6), polling every
 // pollEvery CPU cycles. With addr < 0 it searches addresses 0-6, as a
@@ -543,6 +565,12 @@ func (c *Controller) key(scan uint8) {
 	fn, ch, ok := kbdlayout.DecodeTwinax(code, c.shifted())
 	switch {
 	case !ok:
+	case fn == "Print" && c.localCopy && c.printer != nil && c.printer.Online:
+		// local copy: the screen goes to the terminal's own printer
+		c.printer.Print(screenSCS(c.host.Screen()))
+	case fn == "Print" && c.localCopy && c.printer == nil && c.directPrint != nil:
+		// no printer station (One-Display mode): print the copy directly
+		c.directPrint(screenSCS(c.host.Screen()))
 	case fn != "":
 		c.host.Key(fn)
 	default:

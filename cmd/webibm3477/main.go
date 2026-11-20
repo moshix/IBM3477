@@ -59,6 +59,9 @@ func main() {
 	srv := web.New(web.Config{
 		Model: *model, RomDir: *romDir, Host: *host, Port: *port, Version: version, HostTLS: *hostTLS,
 		Lock: *lock,
+		// print jobs on this computer's printers, but not for the
+		// visitors of a locked public server
+		LocalPrinters: !*lock,
 	})
 	log.Printf("webibm3477 %s on %s (model %s, ROMs: %s)",
 		version, *listen, *model, where)

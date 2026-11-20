@@ -443,7 +443,7 @@ busy.
 | 0x40 | parity latch |
 | 0x10 outstanding | +D holds new data (firmware wrote 0x10 to 0x20000) [L] |
 | 0x0E | +C |
-| 0x01 response level | toggles whenever a response carries +D != 0 [G] |
+| 0x20 response level | alternates with each response. **Confirmed** at 0x20: with it at 0x01 (where IBM's manual puts frame bit 14) the 3477 POST fails its twinax test (test 3). |
 
 The bridge (controller) should send Ack (0x30) after each response, like
 the reference does. A bring-up sequence that works with this firmware:

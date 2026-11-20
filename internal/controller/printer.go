@@ -25,8 +25,8 @@ type PrinterStation struct {
 	addr      uint8
 	pollEvery int
 	since     int
-	queue     [][]byte // print data, in blocks of at most 256 bytes
-	activate  bool     // Write Data sent: Activate Write is next
+	queue     []prnBlock // print data, in blocks of at most 256 bytes
+	activate  bool       // Write Data sent: Activate Write is next
 	// Online reports whether the printer station answered the last poll.
 	Online bool
 }
@@ -44,7 +44,7 @@ const (
 	prnResetExc      = 0x04 // WCD data: reset exception status
 	prnBuffersFull   = 0x20 // frame 2
 	prnCancelRequest = 0x08 // frame 2
-	prnBlock         = 256  // data bytes per Activate Write
+	prnBlockSize     = 256  // data bytes per Activate Write
 )
 
 // NewPrinterStation returns a driver for the printer station at addr,
@@ -53,13 +53,31 @@ func NewPrinterStation(st Station, addr uint8, pollEvery int) *PrinterStation {
 	return &PrinterStation{st: st, addr: addr, pollEvery: pollEvery}
 }
 
-// Print queues SCS print data.
+// prnBlock is one Activate Write's data; last marks the end of a job.
+type prnBlock struct {
+	data []byte
+	last bool
+}
+
+// Print queues one job's SCS print data.
 func (p *PrinterStation) Print(scs []byte) {
 	for len(scs) > 0 {
-		n := min(len(scs), prnBlock)
-		p.queue = append(p.queue, scs[:n])
+		n := min(len(scs), prnBlockSize)
+		p.queue = append(p.queue, prnBlock{data: scs[:n], last: n == len(scs)})
 		scs = scs[n:]
 	}
+}
+
+// dropJob drops the rest of the job being printed (a cancel request);
+// jobs queued after it stay.
+func (p *PrinterStation) dropJob() {
+	for i, b := range p.queue {
+		if b.last {
+			p.queue = p.queue[i+1:]
+			return
+		}
+	}
+	p.queue = nil
 }
 
 // Idle reports whether all queued data went to the printer.
@@ -93,7 +111,8 @@ func (p *PrinterStation) Tick(n int) {
 	}
 	if r.Frame2&prnCancelRequest != 0 {
 		p.st.Deliver(p.addr, prnClear, nil)
-		p.queue, p.activate = nil, false
+		p.dropJob()
+		p.activate = false
 		return
 	}
 	if r.Status&prnBusy != 0 {
@@ -101,7 +120,7 @@ func (p *PrinterStation) Tick(n int) {
 	}
 	switch {
 	case p.activate:
-		p.st.Deliver(p.addr, prnActivateWrite, p.queue[0])
+		p.st.Deliver(p.addr, prnActivateWrite, p.queue[0].data)
 		p.queue = p.queue[1:]
 		p.activate = false
 	case len(p.queue) > 0 && r.Frame2&prnBuffersFull == 0:

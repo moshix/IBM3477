@@ -247,10 +247,15 @@ host to print it ("Send to host").
   terminal's own printer: the 3477 formats it with its Setup Printer
   choices and sends it to its printer (IBM Proprinter commands). The
   emulator collects that; when the printer has been quiet for 2 seconds
-  the print job is ready. Print jobs the host sends to that printer will
-  print the same way (planned).
+  the print job is ready.
 - In the other modes the emulator makes the print job from the screen
   directly (10 characters, 6 lines per inch).
+
+**Host printing:** set Settings › "AS/400 printer device" to a printer
+device name (for example `PRT3477`). Connect then also opens a TN5250
+printer session as that device. Spooled files the host prints on it come
+out of the terminal's printer in Display-Printer mode (formatted by the
+3477), otherwise directly, and show the same print job dialog.
 
 The page then shows the print job:
 - **Save as PDF / text:** in Chrome and Brave you name the file and

@@ -575,3 +575,15 @@ func TestPrintKeyMappable(t *testing.T) {
 		t.Error("Print is not at the top of the mappable keys")
 	}
 }
+
+// TestPrintDialogQueuesJobs: a job arriving while the print dialog is open
+// waits its turn, empty job files are handled, blob URLs are released.
+func TestPrintDialogQueuesJobs(t *testing.T) {
+	js, _ := staticFiles.ReadFile("static/terminal.js")
+	for _, want := range []string{"printQueue.push(m);", "if (printQueue.length > 0) showPrintDialog(printQueue.shift());",
+		"if (!m.data) {", "URL.revokeObjectURL(url)", "URL.revokeObjectURL(a.href)"} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("terminal.js lacks %q", want)
+		}
+	}
+}

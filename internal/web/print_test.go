@@ -3,8 +3,12 @@ package web
 import (
 	"bytes"
 	"errors"
+	"net"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,7 +22,13 @@ func fakeCUPS(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string
 	oldLook, oldRun := lookPath, runCmd
-	t.Cleanup(func() { lookPath, runCmd = oldLook, oldRun })
+	resetCache := func() {
+		printerCache.Lock()
+		printerCache.at = time.Time{}
+		printerCache.Unlock()
+	}
+	resetCache()
+	t.Cleanup(func() { lookPath, runCmd = oldLook, oldRun; resetCache() })
 	lookPath = func(string) (string, error) { return "/usr/bin/lpstat", nil }
 	runCmd = func(name string, stdin []byte, args ...string) ([]byte, error) {
 		calls = append(calls, name+" "+strings.Join(args, " "))
@@ -111,5 +121,68 @@ func TestPrintersNotOfferedWhenLocked(t *testing.T) {
 			}
 			return
 		}
+	}
+}
+
+func TestPrinterDeviceName(t *testing.T) {
+	for in, want := range map[string]string{"prt3477": "PRT3477", " Q$PRT_1 ": "Q$PRT_1"} {
+		if got, ok := printerDevice(in); !ok || got != want {
+			t.Errorf("printerDevice(%q) = %q %v", in, got, ok)
+		}
+	}
+	for _, bad := range []string{"", "1PRT", "TOOLONGNAME1", "PRT 1", "PRT;RM"} {
+		if _, ok := printerDevice(bad); ok {
+			t.Errorf("printerDevice(%q) accepted", bad)
+		}
+	}
+}
+
+// TestLockedServerOpensNoPrinterSession: on a -lock server a printer
+// device from the browser is refused (a visitor must not receive the
+// host's spooled output); the display session still connects.
+func TestLockedServerOpensNoPrinterSession(t *testing.T) {
+	if _, err := os.Stat("../../ibm3477_part1.bin"); err != nil {
+		t.Skip("3477 ROMs not present")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var conns atomic.Int32
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns.Add(1)
+			defer c.Close()
+		}
+	}()
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	p, _ := strconv.Atoi(port)
+	srv := httptest.NewServer(New(Config{Model: "3477", RomDir: "../..", Host: host, Port: p, Lock: true}).Handler())
+	defer srv.Close()
+	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	ws.WriteJSON(clientMsg{Type: "power", Model: "3477"})
+	ws.WriteJSON(clientMsg{Type: "connect", Size: "24x80", PrinterDevice: "PRT01"})
+	ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+	for {
+		var m serverMsg
+		if err := ws.ReadJSON(&m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == "status" && strings.Contains(m.Text, "not offered") {
+			break
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	if n := conns.Load(); n != 1 {
+		t.Fatalf("%d connections to the host, want 1 (the display only)", n)
 	}
 }

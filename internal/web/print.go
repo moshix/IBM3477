@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"ibm3486/internal/emu"
 	"ibm3486/internal/printer"
+	"ibm3486/internal/tn5250"
 )
 
 // Print jobs: the emulated terminal's printer output (emu.SetPrintHandler)
@@ -93,9 +95,32 @@ var (
 	}
 )
 
+// printerCache keeps the printer list for printerCacheTime, so that
+// every print request does not run lpstat again.
+var printerCache struct {
+	sync.Mutex
+	at    time.Time
+	names []string
+	def   string
+}
+
+const printerCacheTime = 10 * time.Second
+
 // listPrinters returns this computer's printers and the default one from
-// CUPS (lpstat), or none where CUPS is not installed.
+// CUPS (lpstat), or none where CUPS is not installed (cached briefly).
 func listPrinters() (names []string, def string) {
+	printerCache.Lock()
+	defer printerCache.Unlock()
+	if time.Since(printerCache.at) < printerCacheTime {
+		return printerCache.names, printerCache.def
+	}
+	names, def = queryPrinters()
+	printerCache.at, printerCache.names, printerCache.def = time.Now(), names, def
+	return names, def
+}
+
+// queryPrinters asks CUPS (lpstat) for the printers and the default one.
+func queryPrinters() (names []string, def string) {
 	if _, err := lookPath("lpstat"); err != nil {
 		return nil, ""
 	}
@@ -135,3 +160,39 @@ func printJobOn(j *printJob, printerName string) error {
 
 // encodeFile is the base64 form of a job file for the page.
 func encodeFile(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// printerDevice checks a host printer device name: an AS/400 object name
+// of at most 10 characters (letters, digits, # $ @ _, not starting with a
+// digit), upper-cased. ok is false for "" and anything else.
+func printerDevice(name string) (string, bool) {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	if name == "" || len(name) > 10 || (name[0] >= '0' && name[0] <= '9') {
+		return "", false
+	}
+	for _, c := range name {
+		if !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("#$@_", c)) {
+			return "", false
+		}
+	}
+	return name, true
+}
+
+// printerSession runs a host printer session (TN5250E, device dev) next
+// to the display session: each print job the host sends goes to the
+// terminal (emu.Machine.PrintSCS), which prints it through its printer
+// station in Display-Printer mode. Status texts stay within 79 columns.
+func (s *Server) printerSession(pc *tn5250.PrintClient, mach *emu.Machine, host, port, dev string,
+	wg *sync.WaitGroup, status func(serverMsg)) {
+	defer wg.Done()
+	if err := pc.Connect(host, port, s.cfg.HostTLS); err != nil {
+		status(serverMsg{Type: "status", Text: fit79("Printer " + dev + ": cannot connect: " + shortErr(err))})
+		return
+	}
+	pc.OnStarted = func(code, text string) {
+		status(serverMsg{Type: "status", Text: fit79("Printer " + dev + ": " + code + " " + text)})
+	}
+	pc.OnJob = mach.PrintSCS
+	if err := pc.Run(); err != nil {
+		status(serverMsg{Type: "status", Text: fit79("Printer " + dev + " session ended: " + shortErr(err))})
+	}
+}

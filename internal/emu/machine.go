@@ -78,6 +78,8 @@ type Machine struct {
 	// mode (nil otherwise); hostPrint: the Print key goes to the host
 	prnStation *controller.PrinterStation
 	hostPrint  hostPrintFlag
+	// hostJobs carries host print jobs (SCS) to the machine goroutine
+	hostJobs chan []byte
 }
 
 // New builds a terminal of the given model with ROMs from roms.
@@ -97,6 +99,7 @@ func New(model string, roms fs.FS) (*Machine, error) {
 		stop:  make(chan struct{}),
 		hostQ: make(chan controller.Host, 1),
 	}
+	mach.hostJobs = make(chan []byte, 4)
 	mach.SetCodepage("")
 	mach.nvPath = mach.loadNVRAM(model)
 	return mach, nil
@@ -155,6 +158,9 @@ func (m *Machine) loop(update func(*Snapshot)) {
 			continue
 		case codes := <-m.keys:
 			m.b.IO.Keyboard().Key(codes...)
+			continue
+		case scs := <-m.hostJobs:
+			m.hostPrintJob(scs)
 			continue
 		case host := <-m.hostQ:
 			if m.ctl != nil {

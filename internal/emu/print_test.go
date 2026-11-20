@@ -63,14 +63,20 @@ func TestMachinePrintKeyPrints(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	m.Key(ScanCodes("fn:Print", false))
 	time.Sleep(5 * time.Second) // printing, then 2 s quiet ends the job
+	// a host print job (SCS from the printer session)
+	m.PrintSCS([]byte{0x2B, 0xC1, 0x02, 0x50, 0xC8, 0xD6, 0xE2, 0xE3, 0x40, 0xD1, 0xD6, 0xC2, 0x15, 0x0C}) // HOST JOB
+	time.Sleep(5 * time.Second)
 	m.Stop()
 	mu.Lock()
 	defer mu.Unlock()
-	if len(jobs) != 1 {
-		t.Fatalf("%d print jobs, want 1", len(jobs))
+	if len(jobs) != 2 {
+		t.Fatalf("%d print jobs, want 2", len(jobs))
 	}
 	if text := jobs[0].Text(); !strings.Contains(text, "PRINT ME") {
 		t.Fatalf("printed %q", text)
+	}
+	if text := jobs[1].Text(); !strings.Contains(text, "HOST JOB") {
+		t.Fatalf("host job printed %q", text)
 	}
 	if len(h.keys) != 0 {
 		t.Errorf("Print also went to the host: %v", h.keys)
@@ -108,10 +114,14 @@ func TestMachinePrintKeyOneDisplay(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	m.Key(ScanCodes("fn:Print", false))
 	time.Sleep(500 * time.Millisecond)
+	// a host print job (SCS from the printer session)
+	m.PrintSCS([]byte{0x2B, 0xC1, 0x02, 0x50, 0xC8, 0xD6, 0xE2, 0xE3, 0x40, 0xD1, 0xD6, 0xC2, 0x15, 0x0C}) // HOST JOB
+	time.Sleep(500 * time.Millisecond)
 	m.Stop()
 	mu.Lock()
 	defer mu.Unlock()
-	if len(jobs) != 1 || !strings.HasPrefix(jobs[0].Text(), " MAIN") {
+	if len(jobs) != 2 || !strings.HasPrefix(jobs[0].Text(), " MAIN") ||
+		strings.TrimSpace(jobs[1].Text()) != "HOST JOB" {
 		t.Fatalf("%d jobs; text %q", len(jobs), func() string {
 			if len(jobs) > 0 {
 				return jobs[0].Text()

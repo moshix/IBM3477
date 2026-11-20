@@ -133,6 +133,10 @@ body {
 #keymap-modal .settings-item { display: flex; align-items: center; gap: 6px; }
 #keymap-modal .settings-item .settings-hint { margin-bottom: 0; }
 #keymap-modal .settings-row label { color: #ccc; font-size: 10px; }
+#keymap-modal .settings-row input[type=text] {
+  background: #333; color: #eee; border: 1px solid #555; padding: 2px 5px;
+  font-size: 10px; text-transform: uppercase;
+}
 #keymap-modal .settings-row select {
   background: #333; color: #eee; border: 1px solid #555; padding: 2px 5px;
   font-size: 10px;

@@ -203,6 +203,12 @@ func (t *Twinax) run(c int, cmd uint8, data []uint8, badParity bool) Response {
 			if ch.parity {
 				st |= 0x40
 			}
+			// The alternating bit is 0x20 in this status byte. The IBM
+			// manual puts the response level at frame bit 14 (0x01), but
+			// the 3477's own POST fails its twinax test (test 3) with the
+			// bit at 0x01: the gate array reports it at 0x20. A
+			// controller must therefore not read 0x20 as "unit not
+			// available" on this terminal; ours ignores it.
 			ch.toggle = !ch.toggle
 			if ch.toggle {
 				st |= 0x20

@@ -98,12 +98,38 @@ at its printer address. Settings › Print key chooses:
 - **Send to host:** the Print key goes to the host, which prints the screen
   on its own printer device.
 
-### 3.3 Planned: host printing (stage 4)
+### 3.3 Host printing (TN5250E printer session)
 
-The host sends spooled files to a printer device. The plan is a second
-TN5250 session as a printer device (TN5250E printer session) whose SCS
-data goes to the printer station through the same driver, so AS/400
-output prints through the 3477 with its Setup Printer choices.
+With Settings › "AS/400 printer device" set (for example `PRT3477`),
+Connect also opens a printer session to the same host
+(`tn5250/printsession.go`, ported from tn5250's `lib5250/printsession.c`
+and `lp5250d`):
+
+1. **Negotiation.** Terminal type `IBM-3812-1`. NEW-ENVIRON: `DEVNAME`
+   (the printer device), `IBMFONT 12`, `IBMTRANSFORM 0` (no host print
+   transform: the host sends SCS) and `CODEPAGE`; no `KBDTYPE`.
+2. **Startup response.** The first record carries a 4-character code at
+   data offset 5. `I901`, `I902` and `I906` mean started. Anything else
+   (`8902` device not available, `2702` device description not found,
+   ...) ends the session; the status bar shows the code and its meaning.
+3. **Print data.** Every later record is answered with Print Complete
+   (flow `0x12`, opcode 1). A Clear record (opcode 2) drops what was
+   received. A 17-byte record ends the job. Other records carry SCS after
+   the 10-byte record header.
+4. **Printing.** Each finished job goes to the terminal
+   (`emu.Machine.PrintSCS`):
+   - Display-Printer mode: through its printer station, so the 3477
+     formats it with its Setup Printer choices;
+   - otherwise: the SCS is laid out as text (`printer.SCSText`: New Line,
+     Line Feed, Carriage Return, Form Feed, Print Position, Transparent;
+     Format controls are skipped).
+
+   Then it is a print job like any other.
+
+The printer device name must be a valid AS/400 name (at most 10
+characters: A-Z, 0-9, # $ @ _). Whether the host creates the device
+automatically depends on its auto-configuration (system value
+`QAUTOVRT`); otherwise create it on the host first.
 
 ## 4. Output in the emulator
 

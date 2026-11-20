@@ -393,6 +393,7 @@ connectBtn.onclick = () => {
     type: 'connect',
     host: hostInput.value,
     port: portInput.value,
+    printerDevice: printerDeviceInput.value,
     size: sizeSelect.value,
     codepage: codepageSelect.value,
   });
@@ -1106,6 +1107,7 @@ const printAction = document.getElementById('print-action');
 const printPrinter = document.getElementById('print-printer');
 const printName = document.getElementById('print-name');
 let printJob = null;       // the job shown in the dialog: {job, pages, name}
+const printQueue = [];     // jobs that arrived while the dialog was open
 const pendingFiles = {};   // "job/format" -> {handle} | {win} | {name}
 let localPrinters = false; // the server offers its printers
 
@@ -1128,6 +1130,15 @@ printAction.addEventListener('change', () => saveSetting('printAction', printAct
 // terminal's printer, or a print request to the host.
 const printKeySelect = document.getElementById('print-key');
 if (settings.printKey === 'local' || settings.printKey === 'host') printKeySelect.value = settings.printKey;
+// The host printer device (stage 4): with a name, Connect also starts a
+// printer session; the host's print jobs print on the terminal's printer.
+const printerDeviceInput = document.getElementById('printer-device');
+if (typeof settings.printerDevice === 'string') printerDeviceInput.value = settings.printerDevice;
+printerDeviceInput.addEventListener('change', () => {
+  printerDeviceInput.value = printerDeviceInput.value.trim().toUpperCase();
+  saveSetting('printerDevice', printerDeviceInput.value);
+});
+
 printKeySelect.addEventListener('change', () => {
   saveSetting('printKey', printKeySelect.value);
   send({ type: 'printkey', printKey: printKeySelect.value });
@@ -1158,6 +1169,10 @@ function onPrintJob(m) {
 }
 
 function showPrintDialog(m) {
+  if (printJob) { // one job at a time: the next shows when this one is done
+    printQueue.push(m);
+    return;
+  }
   printJob = m;
   document.getElementById('print-info').textContent =
     m.pages + (m.pages === 1 ? ' page' : ' pages') + ' printed by the terminal.';
@@ -1180,6 +1195,7 @@ function closePrintDialog(remember) {
   printOverlay.classList.remove('visible');
   printJob = null;
   canvas.focus();
+  if (printQueue.length > 0) showPrintDialog(printQueue.shift());
 }
 
 // requestFile asks the server for a job as PDF or text; handle is a file
@@ -1211,6 +1227,10 @@ function onJobFile(m) {
   const target = pendingFiles[key];
   delete pendingFiles[key];
   if (!target) return;
+  if (!m.data) { // the job is gone (only the last few are kept)
+    if (target.win) target.win.close();
+    return;
+  }
   const type = m.format === 'pdf' ? 'application/pdf' : 'text/plain;charset=utf-8';
   const blob = new Blob([b64(m.data)], { type: type });
   if (target.handle) {
@@ -1219,7 +1239,10 @@ function onJobFile(m) {
       .then(() => { statusText.textContent = 'Saved ' + target.handle.name; })
       .catch((e) => { statusText.textContent = 'Save failed: ' + e.message; });
   } else if (target.win) {
-    target.win.location = URL.createObjectURL(blob); // the browser's PDF viewer
+    const url = URL.createObjectURL(blob);
+    target.win.location = url; // the browser's PDF viewer
+    // the tab keeps its own copy once loaded: release ours later
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   } else {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1227,6 +1250,7 @@ function onJobFile(m) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
     statusText.textContent = 'Downloaded ' + a.download;
   }
 }

@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -131,6 +132,9 @@ type clientMsg struct {
 	// "local" (a copy on the terminal's printer) or "host" ("power",
 	// "printkey")
 	PrintKey string `json:"printKey,omitempty"`
+	// PrinterDevice is the host's printer device for a printer session
+	// started with "connect" ("" = none)
+	PrinterDevice string `json:"printerDevice,omitempty"`
 }
 
 // serverMsg is a message to the browser.
@@ -266,14 +270,22 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 	// printWG: lp runs in goroutines that report with must(); they are
 	// waited for before out is closed
 	var printWG sync.WaitGroup
+	var printing atomic.Bool // an lp command is running
 	// The TN5250 host session runs in its own goroutine (sessWG); it is
 	// disconnected and waited for before out is closed.
 	var host *tn5250.Client
 	var sessWG sync.WaitGroup
+	// prnSess is the host printer session (stage 4), started with the
+	// display session when a printer device name is set
+	var prnSess *tn5250.PrintClient
 	hangUp := func() {
 		if host != nil {
 			host.Disconnect()
 			host = nil
+		}
+		if prnSess != nil {
+			prnSess.Disconnect()
+			prnSess = nil
 		}
 		sessWG.Wait()
 	}
@@ -376,18 +388,28 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 			if j := jobs.get(m.Job); j != nil {
 				data, name := jobFile(j, m.Format)
 				must(serverMsg{Type: "jobfile", Job: j.id, Format: m.Format, Name: name, Data: encodeFile(data)})
+			} else {
+				// no data: the page drops its pending save or tab
+				must(serverMsg{Type: "jobfile", Job: m.Job, Format: m.Format})
+				must(serverMsg{Type: "status", Text: "That print job is no longer available"})
 			}
 		case "jobprint":
 			j := jobs.get(m.Job)
 			switch {
 			case j == nil:
+				must(serverMsg{Type: "status", Text: "That print job is no longer available"})
 			case !s.cfg.LocalPrinters:
 				must(serverMsg{Type: "status", Text: "Printing on this computer is not offered"})
+			case !printing.CompareAndSwap(false, true):
+				// one print command at a time: a looping client cannot
+				// start lp processes without limit
+				must(serverMsg{Type: "status", Text: "A print is still being sent; try again"})
 			default:
 				// lp can take a moment: report from a goroutine
 				printWG.Add(1)
 				go func(j *printJob, prn string) {
 					defer printWG.Done()
+					defer printing.Store(false)
 					if err := printJobOn(j, prn); err != nil {
 						must(serverMsg{Type: "status", Text: fit79("Print failed: " + err.Error())})
 						return
@@ -429,6 +451,16 @@ func (s *Server) WS(w http.ResponseWriter, r *http.Request) {
 			host = cl
 			sessWG.Add(1)
 			go s.hostSession(cl, mach, m.Host, m.Port, target, &sessWG, must)
+			// a printer session needs no sign-on: on a locked public
+			// server a visitor could take over any printer device and
+			// receive its spooled output, so none is opened there
+			if dev, ok := printerDevice(m.PrinterDevice); ok && s.cfg.Lock {
+				must(serverMsg{Type: "status", Text: "Printer " + dev + ": not offered on this server"})
+			} else if ok {
+				prnSess = tn5250.NewPrintClient(dev, m.Codepage)
+				sessWG.Add(1)
+				go s.printerSession(prnSess, mach, m.Host, m.Port, dev, &sessWG, must)
+			}
 		case "disconnect":
 			hangUp()
 			if mach != nil {

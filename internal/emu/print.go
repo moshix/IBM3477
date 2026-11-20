@@ -1,7 +1,6 @@
 package emu
 
 import (
-	"strings"
 	"sync/atomic"
 
 	"ibm3486/internal/controller"
@@ -25,9 +24,10 @@ const maxPrintJob = 4 << 20
 // printCollector gathers printer data into jobs (owned by the machine
 // goroutine).
 type printCollector struct {
-	buf      []byte
-	lastData uint64 // CPU cycle of the last byte received
-	handler  func(*printer.Document)
+	buf       []byte
+	lastData  uint64 // CPU cycle of the last byte received
+	truncated bool   // the job went over maxPrintJob: the rest is dropped
+	handler   func(*printer.Document)
 }
 
 // SetPrintHandler sets the function that receives each finished print
@@ -38,17 +38,22 @@ func (m *Machine) SetPrintHandler(f func(*printer.Document)) { m.prn.handler = f
 // job once the port has been quiet for printIdle.
 func (m *Machine) collectPrint() {
 	if out := m.b.IO.PrinterOutput(); len(out) > 0 {
-		if len(m.prn.buf)+len(out) <= maxPrintJob {
+		// past the limit the rest of the job is dropped, not pieced
+		// together: a later small piece could land inside a cut-off
+		// command and be misread
+		if !m.prn.truncated && len(m.prn.buf)+len(out) <= maxPrintJob {
 			m.prn.buf = append(m.prn.buf, out...)
+		} else {
+			m.prn.truncated = true
 		}
 		m.prn.lastData = m.b.CPU.Cycles
 		return
 	}
-	if len(m.prn.buf) == 0 || m.b.CPU.Cycles-m.prn.lastData < printIdle {
+	if (len(m.prn.buf) == 0 && !m.prn.truncated) || m.b.CPU.Cycles-m.prn.lastData < printIdle {
 		return
 	}
 	doc := printer.Interpret(m.prn.buf)
-	m.prn.buf = nil
+	m.prn.buf, m.prn.truncated = nil, false
 	if doc.HasText() && m.prn.handler != nil {
 		m.prn.handler(doc)
 	}
@@ -109,26 +114,34 @@ func (m *Machine) SetPrintKeyToHost(toHost bool) { m.hostPrint.Store(toHost) }
 // goroutine, read by the machine goroutine).
 type hostPrintFlag = atomic.Bool
 
-// printDirect makes a print job from a screen copy (SCS) when the
-// terminal has no printer station: EBCDIC decoded with the session's
-// codepage, New Line ends a line, Form Feed a page.
+// printDirect makes a print job from SCS print data (a screen copy, or a
+// host print job) when the terminal has no printer station: the SCS is
+// laid out as text in the session's codepage (printer.SCSText).
 func (m *Machine) printDirect(scs []byte) {
-	var b strings.Builder
-	for _, c := range scs {
-		switch c {
-		case 0x15: // New Line
-			b.WriteByte('\n')
-		case 0x0C: // Form Feed
-			b.WriteByte('\f')
-		default:
-			if r := m.decode[c]; r >= 0x20 {
-				b.WriteRune(r)
-			} else {
-				b.WriteByte(' ')
-			}
-		}
-	}
-	if doc := printer.TextDocument(b.String()); doc.HasText() && m.prn.handler != nil {
+	text := printer.SCSText(scs, func(c byte) rune { return m.decode[c] })
+	if doc := printer.TextDocument(text); doc.HasText() && m.prn.handler != nil {
 		m.prn.handler(doc)
 	}
+}
+
+// PrintSCS prints a host print job (SCS data from a printer session):
+// through the terminal's printer station in Display-Printer mode, so the
+// 3477 formats it with its Setup Printer choices, else directly. Safe
+// from any goroutine.
+func (m *Machine) PrintSCS(scs []byte) {
+	select {
+	case m.hostJobs <- scs:
+	case <-m.stop:
+	}
+}
+
+// hostPrint runs on the machine goroutine.
+func (m *Machine) hostPrintJob(scs []byte) {
+	if m.prnStation != nil {
+		// queued even before the station answers its first poll (just
+		// attached, or the terminal restarting): Tick delivers it
+		m.prnStation.Print(scs)
+		return
+	}
+	m.printDirect(scs)
 }

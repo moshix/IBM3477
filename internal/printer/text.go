@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// maxTextColumns bounds a text line (a 13.2" form at 17.1 cpi is 226).
+const maxTextColumns = 400
+
 // Text renders the document as plain text: one line per printed line
 // (blank lines where the paper advanced further), pages separated by a
 // form feed. Each run is placed on a character grid of its own pitch;
@@ -42,19 +45,32 @@ func (d *Document) Text() string {
 				out.WriteByte('\n')
 			}
 			prev = y
+			// one grid per line, at its finest pitch; every character is
+			// placed by its own position, so runs of different pitch or
+			// double width keep their places (a wide character is
+			// followed by a blank column)
+			grid := 0.0
+			for _, r := range lines[k] {
+				if p := 1 / r.CPI; grid == 0 || p < grid {
+					grid = p
+				}
+			}
 			var row []rune
 			for _, r := range lines[k] {
-				pitch := 1 / r.CPI
+				adv := 1 / r.CPI
 				if r.Wide {
-					pitch *= 2
+					adv *= 2
 				}
-				col := int(math.Round(r.X / pitch))
 				for i, c := range r.Text {
-					for len(row) <= col+i {
+					col := int(math.Round((r.X + float64(i)*adv) / grid))
+					if col < 0 || col > maxTextColumns {
+						continue
+					}
+					for len(row) <= col {
 						row = append(row, ' ')
 					}
-					if c != ' ' || row[col+i] == ' ' {
-						row[col+i] = c
+					if c != ' ' || row[col] == ' ' {
+						row[col] = c
 					}
 				}
 			}

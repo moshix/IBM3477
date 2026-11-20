@@ -258,11 +258,18 @@ func (c *Client) Key(name string) {
 }
 
 // MoveCursor puts the cursor at row, col (0-based), as a click with a
-// pointing device does; positions outside the screen are ignored.
+// pointing device does. Only positions inside an input (non-bypass)
+// field are accepted; others, and positions off the screen, are ignored.
 func (c *Client) MoveCursor(row, col int) {
 	c.withSession(func() {
 		d := c.disp
 		if row < 0 || col < 0 || row >= d.height() || col >= d.width() {
+			return
+		}
+		// only into an input field: a click elsewhere (e.g. the click
+		// that brings the browser window to the front) would leave the
+		// cursor where typing fails with 0005 and AID keys go astray
+		if f := d.fieldAt(row, col); f == nil || f.isBypass() {
 			return
 		}
 		d.setCursor(row, col)

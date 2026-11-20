@@ -446,7 +446,8 @@ window.addEventListener('mouseup', (ev) => {
   selecting = false;
   const still = downAt && Math.hypot(ev.clientX - downAt.x, ev.clientY - downAt.y) < CLICK_SLOP_PX;
   if (sel && (still || (sel.a.r === sel.b.r && sel.a.c === sel.b.c))) {
-    // a click (no drag): move the cursor there, except on the status row
+    // a click (no drag): move the cursor there; the host side ignores
+    // clicks outside input fields and on the status row
     if (hostConnected && lastScreen && sel.a.r < lastScreen.rows - 1) {
       send({ type: 'cursor', row: sel.a.r, col: sel.a.c });
     }
@@ -516,6 +517,9 @@ function armPaste() {
 
 pasteSink.addEventListener('paste', (ev) => {
   ev.preventDefault();
+  // the focus moves back to the screen below, so the document handler
+  // would see the screen focused and paste the text a second time
+  ev.stopPropagation();
   pasteText(ev.clipboardData ? ev.clipboardData.getData('text/plain') : '');
   canvas.focus();
 });

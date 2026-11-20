@@ -172,16 +172,29 @@ func TestBackspaceDeletes(t *testing.T) {
 	}
 }
 
-// TestMoveCursor: a click moves the cursor; off-screen positions do not.
+// TestMoveCursor: a click inside an input field moves the cursor there;
+// clicks outside input fields and off-screen positions do not.
 func TestMoveCursor(t *testing.T) {
-	c, _ := newOperatorClient(t, 0x40)
-	c.MoveCursor(10, 33)
-	if st := c.Screen(); st.CursorRow != 10 || st.CursorCol != 33 {
-		t.Fatalf("cursor = %d,%d, want 10,33", st.CursorRow, st.CursorCol)
+	c, _ := newOperatorClient(t, 0x40) // input field row 2, cols 5-9
+	c.MoveCursor(2, 8)
+	if st := c.Screen(); st.CursorRow != 2 || st.CursorCol != 8 {
+		t.Fatalf("cursor = %d,%d, want 2,8", st.CursorRow, st.CursorCol)
 	}
-	c.MoveCursor(24, 0) // the status row is not part of the host screen
+	c.MoveCursor(10, 33) // protected area
+	c.MoveCursor(2, 4)   // the field's attribute byte
+	c.MoveCursor(24, 0)  // the status row is not part of the host screen
 	c.MoveCursor(-1, 5)
-	if st := c.Screen(); st.CursorRow != 10 || st.CursorCol != 33 {
-		t.Fatalf("cursor moved to %d,%d by an off-screen click", st.CursorRow, st.CursorCol)
+	if st := c.Screen(); st.CursorRow != 2 || st.CursorCol != 8 {
+		t.Fatalf("cursor moved to %d,%d by a click outside the field", st.CursorRow, st.CursorCol)
+	}
+}
+
+// TestMoveCursorBypassField: a click in an output-only (bypass) field
+// does not move the cursor.
+func TestMoveCursorBypassField(t *testing.T) {
+	c, _ := newOperatorClient(t, 0x60) // FFW 0x60xx: bypass
+	c.MoveCursor(2, 7)
+	if st := c.Screen(); st.CursorRow != 2 || st.CursorCol != 5 {
+		t.Fatalf("cursor = %d,%d, want it left at 2,5", st.CursorRow, st.CursorCol)
 	}
 }

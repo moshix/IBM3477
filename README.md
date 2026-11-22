@@ -134,7 +134,7 @@ The two programs are:
 | Binary | Purpose |
 |---|---|
 | `bin/webibm3477` | Multi-user server. Every browser tab gets its own emulated terminal. |
-| `bin/appwebibm3477` | Desktop app. Serves only this computer (`127.0.0.1:53477`), opens the browser by itself, and quits about 30 seconds after the last tab closes. The URL carries a per-run secret, so other web pages cannot use the terminal. |
+| `bin/appwebibm3477` | Desktop app. Serves only this computer (`127.0.0.1:53477`), opens the browser by itself, returns to the shell at once (it runs on in the background, logging to the user cache directory), and quits about 30 seconds after the last tab closes; `-foreground` keeps it in the shell. The URL carries a per-run secret, so other web pages cannot use the terminal. |
 
 ```sh
 ./bin/webibm3477 -listen :8050 -romdir . -host pub400.com -port 23
@@ -196,8 +196,8 @@ file.
 
 ### Browser settings
 
-Settings › Display sets the text colour: IBM Green (default), Amber or
-White, and switches the sound on or off. The sound is the terminal's
+Settings › Display sets the text colour: IBM Green (default), DEC Amber
+(as on the VT220), White or IBM 3279 Blue, and switches the sound on or off. The sound is the terminal's
 own speaker as its firmware drives it: a key click, the alarm when the
 host or an input error asks for one, and a short beep at power-on.
 Browsers play audio only after a key press or click on the page. The

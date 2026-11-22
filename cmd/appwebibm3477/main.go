@@ -6,6 +6,11 @@
 // Usage: appwebibm3477 [-listen 127.0.0.1:53477] [-model 3477]
 //
 //	[-romdir DIR] [-host h] [-port p] [-idle-exit 30s] [-no-browser]
+//	[-foreground]
+//
+// It returns to the shell as soon as the terminal is serving; the server
+// runs on in the background until its last browser tab closes
+// (detach.go). -foreground (or -idle-exit 0) keeps it in the shell.
 package main
 
 import (
@@ -48,10 +53,17 @@ func main() {
 		"quit this long after the last tab closes (0 = never)")
 	noBrowser := flag.Bool("no-browser", false, "only print the URL")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	foreground := flag.Bool("foreground", false,
+		"stay in the shell until quit (default: return to the shell at once)")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("appwebibm3477", version)
 		return
+	}
+	// With -idle-exit 0 nothing would ever stop a background server, so
+	// it then stays in the foreground, where Ctrl-C ends it.
+	if !*foreground && *idle > 0 && !isServerChild() {
+		os.Exit(runInBackground(os.Stdout))
 	}
 	if err := validateListen(*listenAddr); err != nil {
 		log.Fatal(err)
@@ -111,6 +123,9 @@ func main() {
 		printManualURL(url)
 	} else {
 		openBrowser(url)
+	}
+	if isServerChild() {
+		serverReady()
 	}
 	<-ctx.Done()
 	shut, cancel := context.WithTimeout(context.Background(), 3*time.Second)

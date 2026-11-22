@@ -308,7 +308,7 @@ func TestSettingsRemembered(t *testing.T) {
 		}
 	}
 	html, _ := staticFiles.ReadFile("static/index.html")
-	for _, opt := range []string{`value="green"`, `value="amber"`, `value="white"`} {
+	for _, opt := range []string{`value="green"`, `value="amber"`, `value="white"`, `value="blue"`} {
 		if !strings.Contains(string(html), opt) {
 			t.Errorf("colour setting lacks option %s", opt)
 		}
@@ -585,5 +585,78 @@ func TestPrintDialogQueuesJobs(t *testing.T) {
 		if !strings.Contains(string(js), want) {
 			t.Errorf("terminal.js lacks %q", want)
 		}
+	}
+}
+
+// TestZoom: the zoom buttons scale the screen in 10% steps between 50%
+// and 200% of the window-filling size, always at 4:3, and the zoom is
+// remembered. The fake DOM's screen area fits a 912x684 box at 100%.
+func TestZoom(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	saved := `{"webibm3477-settings":"{\"zoom\":0.5}"}`
+	out, err := exec.Command("node", "testdata/domcheck.js", "static/terminal.js", saved).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	for _, want := range []string{
+		`ZOOM load {"w":"456px","h":"342px","label":"50%"}`,   // restored
+		`ZOOM in {"w":"547px","h":"410px","label":"60%"}`,     // one step up
+		`ZOOM min {"w":"456px","h":"342px","label":"50%"}`,    // clamped at 50%
+		`ZOOM reset {"w":"912px","h":"684px","label":"100%"}`, // back to fit
+		`ZOOM saved 1`,
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("output lacks %s:\n%s", want, out)
+		}
+	}
+	html, _ := staticFiles.ReadFile("static/index.html")
+	for _, id := range []string{"btn-zoom-in", "btn-zoom-out", "btn-zoom-reset"} {
+		if !strings.Contains(string(html), `id="`+id+`"`) {
+			t.Errorf("index.html lacks button %s", id)
+		}
+	}
+}
+
+// TestSettingsApplyAtOnce: text colour, sound and keyboard click mute take
+// effect as soon as they are changed in Settings, before Close is pressed.
+// While powered off the "Powered off" hint is redrawn in a dim version of
+// the new colour (DEC amber 0xd0,0x8a,0x00 * 0.55).
+func TestSettingsApplyAtOnce(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	out, err := exec.Command("node", "testdata/domcheck.js", "static/terminal.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	want := `LIVE {"fill":"rgb(114,76,0)","color":"amber","sound":"off","muteClick":true}`
+	if !strings.Contains(string(out), want) {
+		t.Errorf("output lacks %s:\n%s", want, out)
+	}
+	js, _ := staticFiles.ReadFile("static/terminal.js")
+	if strings.Contains(string(js), "'#1a6b2a'") {
+		t.Error("the powered-off hint still has a fixed green colour")
+	}
+}
+
+// TestBlueColour: the IBM 3279 blue is a valid text colour; a saved choice
+// of it is restored (unknown names fall back to green).
+func TestBlueColour(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	saved := `{"webibm3477-settings":"{\"color\":\"blue\"}"}`
+	out, err := exec.Command("node", "testdata/domcheck.js", "static/terminal.js", saved).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if !strings.Contains(string(out), `"color":"blue"`) {
+		t.Errorf("blue not restored: %s", out)
+	}
+	js, _ := staticFiles.ReadFile("static/terminal.js")
+	if !strings.Contains(string(js), "blue: { normal: [0x50, 0x8c, 0xff]") {
+		t.Error("PHOSPHORS lacks the 3279 blue")
 	}
 }

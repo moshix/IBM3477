@@ -21,8 +21,15 @@ let cellH = 20;        // scan lines per character row, from the CRTC
 //   more.
 const PHOSPHORS = {
   green: { normal: [0x2a, 0xc8, 0x55], high: [0x97, 0xff, 0xc2] },
-  amber: { normal: [0xe0, 0x96, 0x00], high: [0xff, 0xbe, 0x3c] },
+  // DEC amber, as on the VT200 series (VT220): the saturated orange-amber
+  // of the P3-type amber phosphor, high intensity #FFB000 (the usual
+  // approximation; no official DEC RGB value exists), normal a dimmer
+  // shade of the same hue
+  amber: { normal: [0xd0, 0x8a, 0x00], high: [0xff, 0xb0, 0x00] },
   white: { normal: [0xa7, 0xa7, 0x9d], high: [0xff, 0xff, 0xff] },
+  // the blue of the IBM 3279 colour display (an approximation: a bright,
+  // slightly violet blue that still reads well on black)
+  blue: { normal: [0x50, 0x8c, 0xff], high: [0xa0, 0xc8, 0xff] },
 };
 const COLORS = {       // the colours in use, normal and high intensity
   normal: PHOSPHORS.green.normal,
@@ -260,11 +267,31 @@ function fitCanvas() {
   const statusH = document.getElementById('statusbar').offsetHeight;
   const w = Math.max(0, wrap.clientWidth - pad);
   const h = Math.max(0, Math.min(wrap.clientHeight, window.innerHeight - toolbarH - statusH) - pad);
-  const boxW = Math.min(w, h * SCREEN_ASPECT);
+  // the zoom scales the whole 4:3 box, so the aspect ratio (and with it
+  // the shape of the characters) stays the same at every zoom level
+  const boxW = Math.min(w, h * SCREEN_ASPECT) * zoom;
   canvas.style.width = Math.floor(boxW) + 'px';
   canvas.style.height = Math.floor(boxW / SCREEN_ASPECT) + 'px';
 }
 window.addEventListener('resize', fitCanvas);
+
+// Zoom: a factor on the window-filling size (100%). Below 100% the screen
+// sits smaller in the middle of the window; above it #screen-wrap scrolls.
+// Kept in steps of 10% between 50% and 200%, remembered across visits.
+const ZOOM_MIN = 0.5, ZOOM_MAX = 2, ZOOM_STEP = 0.1;
+const zoomResetBtn = document.getElementById('btn-zoom-reset');
+let zoom = 1;
+function setZoom(z) {
+  // round to whole steps so repeated +/- never drift (0.1 is inexact)
+  z = Math.round(z / ZOOM_STEP) * ZOOM_STEP;
+  zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+  zoomResetBtn.textContent = Math.round(zoom * 100) + '%';
+  fitCanvas();
+}
+document.getElementById('btn-zoom-in').onclick = () => { setZoom(zoom + ZOOM_STEP); saveSetting('zoom', zoom); canvas.focus(); };
+document.getElementById('btn-zoom-out').onclick = () => { setZoom(zoom - ZOOM_STEP); saveSetting('zoom', zoom); canvas.focus(); };
+zoomResetBtn.onclick = () => { setZoom(1); saveSetting('zoom', zoom); canvas.focus(); };
+setZoom(typeof settings.zoom === 'number' ? settings.zoom : 1);
 
 function setCanvasSize(cols, rows) {
   if (canvas.width !== cols * cellW || canvas.height !== rows * cellH) {
@@ -280,7 +307,10 @@ function drawPoweredOff() {
   setCanvasSize(80, 25);
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#1a6b2a';
+  // the hint is a dim version of the chosen text colour (close to the
+  // old fixed #1a6b2a for IBM green), so a colour change in Settings
+  // shows even while the terminal is off
+  ctx.fillStyle = rgbCSS(COLORS.normal.map((v) => Math.round(v * 0.55)));
   ctx.font = '28px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(poweredOn ? '' : 'Powered off', canvas.width / 2, canvas.height / 2);
@@ -907,7 +937,7 @@ codepageSelect.addEventListener('change', () => {
   try { localStorage.setItem('webibm3477-codepage', codepageSelect.value); } catch (e) { /* private mode */ }
 });
 
-// Text colour (Settings > Display): IBM green, amber or white.
+// Text colour (Settings > Display): IBM green, DEC amber, white or 3279 blue.
 const colorSelect = document.getElementById('color-select');
 function applyColor(name) {
   const p = PHOSPHORS[name] || PHOSPHORS.green;

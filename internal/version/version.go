@@ -4,4 +4,4 @@
 package version
 
 // Number is the current release.
-const Number = "0.9.1"
+const Number = "0.9.2"

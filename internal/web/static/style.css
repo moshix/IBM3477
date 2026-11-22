@@ -19,20 +19,40 @@ body {
 }
 #toolbar button { cursor: pointer; }
 #toolbar button:hover { background: #444; }
+/* Settings shows a gear icon in the usual button frame; line-height 0
+   keeps the frame tight around the icon */
+#toolbar #btn-settings { padding: 1px 5px; line-height: 0; }
 .sep { width: 1px; height: 15px; background: #555; margin: 0 3px; }
 /* min-height: 0 lets the screen area shrink inside the flex column, so
    the canvas can never push the status bar below the window. */
 #screen-wrap {
-  flex: 1; min-height: 0; display: flex; align-items: center;
-  justify-content: center; overflow: hidden; padding: 8px;
+  flex: 1; min-height: 0; display: flex; overflow: auto; padding: 8px;
 }
+/* Zoom controls, at the right of the status bar. The buttons stand out:
+   bold, with a teal border and a larger - and + so they are easy to find
+   and hit. */
+#zoom-controls { display: flex; align-items: center; gap: 6px; margin-right: 16px; }
+#zoom-controls button {
+  background: #333; border: 1px solid #4ec9b0; color: #4ec9b0;
+  font: inherit; font-weight: bold; border-radius: 3px; cursor: pointer;
+  padding: 0 6px;
+}
+#zoom-controls #btn-zoom-out, #zoom-controls #btn-zoom-in {
+  font-size: 14px; line-height: 1; padding: 0 8px;
+}
+#zoom-controls #btn-zoom-reset { min-width: 48px; }
+#zoom-controls button:hover { background: #4ec9b0; color: #1a1a1a; }
 #toolbar, #statusbar { flex-shrink: 0; }
 /* The canvas keeps the terminal's native pixels; terminal.js sets its
-   CSS size to the largest that fits #screen-wrap (aspect ratio kept). */
+   CSS size to the largest that fits #screen-wrap (aspect ratio kept),
+   times the zoom. margin: auto centres it like flex centring would, but
+   when zoomed above 100% it overflows to the right and bottom only, so
+   scrolling reaches every edge (flex centring would cut off the left
+   and top). */
 #screen {
   image-rendering: pixelated;
   background: #000; outline: none;
-  display: block;
+  display: block; margin: auto; flex-shrink: 0;
 }
 /* The version, in subdued gray at the top right corner of the page
    (the right end of the toolbar), outside the terminal screen. */
@@ -40,7 +60,8 @@ body {
   margin-left: auto; color: #666; font: 9px monospace;
 }
 #statusbar {
-  display: flex; justify-content: space-between; padding: 3px 12px;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 3px 12px;
   background: #222; border-top: 1px solid #444; color: #aaa;
 }
 
@@ -55,9 +76,11 @@ body {
 /* Settings / keyboard mapping modal (styling from web5250), about 15%
    smaller than web5250's, with the key mappings in two columns so more
    of them fit on the screen. */
+/* The overlay only lightly dims the page, so text colour changes made in
+   Settings are visible on the terminal screen at once, before Close. */
 #modal-overlay {
   display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.7); z-index: 100;
+  background: rgba(0,0,0,0.25); z-index: 100;
   justify-content: center; align-items: center;
 }
 #modal-overlay.visible { display: flex; }

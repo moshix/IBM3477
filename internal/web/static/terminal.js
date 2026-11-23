@@ -189,6 +189,18 @@ function attrStyle(attr, statusRow, extra) {
   return MONO_ATTR[attr & 0x1F].replace('c', '');
 }
 
+// Fill colour of the copy-selection highlight.
+const SEL_FILL = 'rgba(119,255,153,0.35)';
+
+// selCellHasText tells whether the cell at byte offset i is part of the
+// text a selection highlights: a printable character (0x00 and 0x40 are
+// the blanks drawScreen leaves empty), or any non-display cell, whose
+// content is hidden but still part of an input field.
+function selCellHasText(cells, i, statusRow) {
+  if (attrStyle(cells[i + 1], statusRow, cells[i + 2]) === 'n') return true;
+  return cells[i] !== 0x00 && cells[i] !== 0x40;
+}
+
 let lastScreen = null;
 let blinkOn = true;
 let cursor = { row: 0, col: 0, on: false };
@@ -233,11 +245,26 @@ function drawScreen(rows, cols, cells) {
   // show the line on every screen).
   ctx.fillStyle = rgbCSS(COLORS.normal);
   ctx.fillRect(0, (rows - 1) * cellH, cols * cellW, 1);
-  // mouse selection (copy): translucent highlight over the rectangle
+  // mouse selection (copy): translucent highlight over the cells of the
+  // rectangle that hold text. Blank cells stay unmarked, so empty screen
+  // areas do not light up. Non-display cells (password fields) are marked
+  // even when blank: they are fields the user may be selecting.
   if (sel) {
     const b = selBounds();
-    ctx.fillStyle = 'rgba(119,255,153,0.35)';
-    ctx.fillRect(b.c0 * cellW, b.r0 * cellH, (b.c1 - b.c0 + 1) * cellW, (b.r1 - b.r0 + 1) * cellH);
+    ctx.fillStyle = SEL_FILL;
+    for (let r = b.r0; r <= b.r1; r++) {
+      // join neighbouring text cells into one rectangle per run: a single
+      // fill per run avoids faint seams between translucent cells
+      let runStart = -1;
+      for (let c = b.c0; c <= b.c1 + 1; c++) {
+        const on = c <= b.c1 && selCellHasText(cells, (r * cols + c) * 3, r === rows - 1);
+        if (on && runStart < 0) runStart = c;
+        if (!on && runStart >= 0) {
+          ctx.fillRect(runStart * cellW, r * cellH, (c - runStart) * cellW, cellH);
+          runStart = -1;
+        }
+      }
+    }
   }
   // cursor: an underscore on the cursor cell, blinking
   if (cursor.on && blinkOn && cursor.row < rows && cursor.col < cols) {

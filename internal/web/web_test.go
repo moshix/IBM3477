@@ -660,3 +660,23 @@ func TestBlueColour(t *testing.T) {
 		t.Error("PHOSPHORS lacks the 3279 blue")
 	}
 }
+
+// TestSelectionMarksOnlyText: a mouse selection highlights only cells
+// that hold text or belong to a non-display (password) field, never the
+// blank screen around them (domcheck.js drags over a small test screen).
+func TestSelectionMarksOnlyText(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	out, err := exec.Command(node, "testdata/domcheck.js", "static/terminal.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("domcheck failed: %s %v", out, err)
+	}
+	// [x, y, w, h] in canvas pixels, 10x10 cells: "AB" and "C" on row 0,
+	// the two password cells and "D" on row 1
+	want := "SEL [[0,0,20,10],[50,0,10,10],[10,10,20,10],[40,10,10,10]]"
+	if !strings.Contains(string(out), want) {
+		t.Errorf("selection highlight wrong, want %s in:\n%s", want, out)
+	}
+}

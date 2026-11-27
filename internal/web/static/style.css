@@ -59,6 +59,18 @@ body {
 #version-label {
   margin-left: auto; color: #666; font: 9px monospace;
 }
+/* In the native macOS app (macos/IBM3477, which adds class native-app
+   to <html>) there is no browser chrome, so the toolbar is back at the
+   page's full 13px, with padding and gaps scaled by the same 1.3. */
+html.native-app #toolbar { font-size: 13px; gap: 8px; padding: 5px 12px; }
+html.native-app #toolbar input, html.native-app #toolbar select,
+html.native-app #toolbar button { padding: 3px 8px; }
+html.native-app #toolbar #btn-power { padding: 3px 12px; }
+html.native-app #toolbar #btn-connect { padding: 4px 12px; }
+html.native-app #toolbar #btn-settings { padding: 1px 6px; }
+html.native-app #toolbar #btn-settings svg { width: 23px; height: 23px; }
+html.native-app .sep { height: 20px; margin: 0 4px; }
+html.native-app #version-label { font-size: 9px; }
 #statusbar {
   display: flex; justify-content: space-between; align-items: center;
   padding: 3px 12px;

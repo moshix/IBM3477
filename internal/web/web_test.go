@@ -370,7 +370,7 @@ func TestVersionLabel(t *testing.T) {
 	if !strings.Contains(string(html), `id="version-label"`) {
 		t.Error("index.html lacks the version label")
 	}
-	for _, want := range []string{"'webibm3477 v' + defaults.version",
+	for _, want := range []string{"versionLabel.textContent = defaults.version;",
 		"b.addEventListener('click', () => canvas.focus());",
 		"send({ type: 'cursor', row: sel.a.r, col: sel.a.c });",
 		"const CLICK_SLOP_PX = 5;"} {

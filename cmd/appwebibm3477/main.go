@@ -6,11 +6,12 @@
 // Usage: appwebibm3477 [-listen 127.0.0.1:53477] [-model 3477]
 //
 //	[-romdir DIR] [-host h] [-port p] [-idle-exit 30s] [-no-browser]
-//	[-foreground]
+//	[-foreground] [-embedded]
 //
 // It returns to the shell as soon as the terminal is serving; the server
 // runs on in the background until its last browser tab closes
 // (detach.go). -foreground (or -idle-exit 0) keeps it in the shell.
+// -embedded runs it as the server of the native macOS app (embedded.go).
 package main
 
 import (
@@ -55,6 +56,8 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	foreground := flag.Bool("foreground", false,
 		"stay in the shell until quit (default: return to the shell at once)")
+	embedded := flag.Bool("embedded", false,
+		"run as the server of the macOS app: print the URL, quit when stdin closes")
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("appwebibm3477", version)
@@ -62,7 +65,11 @@ func main() {
 	}
 	// With -idle-exit 0 nothing would ever stop a background server, so
 	// it then stays in the foreground, where Ctrl-C ends it.
-	if !*foreground && *idle > 0 && !isServerChild() {
+	if *embedded {
+		// the app owns the lifetime (stdin), so no detach and no idle exit
+		*idle = 0
+	}
+	if !*embedded && !*foreground && *idle > 0 && !isServerChild() {
 		os.Exit(runInBackground(os.Stdout))
 	}
 	if err := validateListen(*listenAddr); err != nil {
@@ -75,6 +82,11 @@ func main() {
 
 	explicit := false
 	flag.Visit(func(f *flag.Flag) { explicit = explicit || f.Name == "listen" })
+	if *embedded && !explicit {
+		// its own port, so a browser-mode instance cannot take it and the
+		// app's saved settings (per origin, port included) stay put
+		*listenAddr = embeddedListen
+	}
 	ln, err := listen(*listenAddr, explicit)
 	if err != nil {
 		log.Fatal(err)
@@ -119,7 +131,10 @@ func main() {
 	}()
 	log.Printf("appwebibm3477 %s serving IBM %s on %s (ROMs: %s)", version, *model, addr, where)
 	mon.start(startupTimeout)
-	if *noBrowser {
+	if *embedded {
+		announceURL(os.Stdout, url)
+		watchParent(os.Stdin, stop)
+	} else if *noBrowser {
 		printManualURL(url)
 	} else {
 		openBrowser(url)

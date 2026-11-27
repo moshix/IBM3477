@@ -1341,7 +1341,7 @@ for (const b of document.querySelectorAll('#toolbar button')) {
 
 // Version label at the top right of the screen
 const versionLabel = document.getElementById('version-label');
-if (versionLabel && defaults.version) versionLabel.textContent = 'webibm3477 v' + defaults.version;
+if (versionLabel && defaults.version) versionLabel.textContent = defaults.version;
 
 drawPoweredOff();
 open();

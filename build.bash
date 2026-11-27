@@ -4,13 +4,14 @@
 #   Linux amd64
 #   Linux arm64
 # Output: bin/<app>-<version>-<target>, plus bin/<app> (the macOS
-# universal binary, for running on this Mac).
+# universal binary, for running on this Mac), and "bin/IBM3477.app", the
+# native macOS app (tools/make-macos-app.bash) with bin/appwebibm3477 in it.
 #
 # The IBM 3477 ROMs are embedded: they are copied from this directory into
 # internal/roms/files/ (gitignored) and picked up by go:embed. The partial
 # 3486 dump is not embedded (it cannot boot).
-# Requires Go; the macOS universal binary also needs lipo (Xcode command
-# line tools), so run this script on a Mac.
+# Requires Go; the macOS universal binary and the app also need lipo and
+# swiftc (Xcode command line tools), so run this script on a Mac.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -21,7 +22,9 @@ LDFLAGS=""
 APPS="webibm3477 appwebibm3477"
 EMBED_ROMS="ibm3477_part1.bin ibm3477_part2.bin"
 
-command -v lipo >/dev/null || { echo "error: lipo not found (install the Xcode command line tools)" >&2; exit 1; }
+for t in lipo swiftc; do
+  command -v $t >/dev/null || { echo "error: $t not found (install the Xcode command line tools)" >&2; exit 1; }
+done
 for r in $EMBED_ROMS; do
   [ -f "$r" ] || { echo "error: ROM $r not found in $(pwd)" >&2; exit 1; }
   cp "$r" internal/roms/files/
@@ -35,7 +38,7 @@ go test -short ./...
 mkdir -p bin
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-rm -f bin/*
+rm -rf bin/* # -r: the .app bundle is a directory
 # build GOOS GOARCH APP OUT: pure Go, no cgo, so it cross-compiles anywhere
 build() {
   echo "  $3: $1/$2"
@@ -52,6 +55,9 @@ for app in $APPS; do
   build linux arm64 "$app" "bin/$app-$VERSION-linux-arm64"
 done
 
+echo "  IBM3477.app: macOS app"
+tools/make-macos-app.bash IBM_3477.jpg bin bin/appwebibm3477 >/dev/null
+
 echo ""
 echo "Done:"
 for app in $APPS; do
@@ -60,3 +66,4 @@ for app in $APPS; do
     printf '  %-44s %s\n' "$f" "$(file -b "$f" | head -1 | cut -c1-60)"
   done
 done
+printf '  %-44s %s\n' "bin/IBM3477.app" "native macOS app (Cocoa), $VERSION"

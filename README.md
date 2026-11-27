@@ -128,7 +128,8 @@ opcodes, and every path ends properly; guessed entries are labelled
 
 The script embeds the ROMs, runs `go vet` and the tests, then builds into
 `bin/` (`bin/<name>-<version>-<target>`). It also copies the macOS
-universal binaries to `bin/webibm3477` and `bin/appwebibm3477`.
+universal binaries to `bin/webibm3477` and `bin/appwebibm3477`, and
+builds the native macOS app `bin/IBM3477.app` (see below).
 The two programs are:
 
 | Binary | Purpose |
@@ -140,6 +141,23 @@ The two programs are:
 ./bin/webibm3477 -listen :8050 -romdir . -host pub400.com -port 23
 ./bin/appwebibm3477                 # finds the ROMs in . or next to the binary
 ./bin/appwebibm3477 -no-browser     # just print the URL (e.g. over ssh -L)
+```
+
+### Native macOS app
+
+`./build.bash` also builds `bin/IBM3477.app` (through
+`tools/make-macos-app.bash`), a normal Cocoa app with its own window, Dock icon and menus, and no
+browser tab. The window is a WKWebView
+(`macos/IBM3477/main.swift`). It starts the copy of `appwebibm3477`
+inside the bundle as `appwebibm3477 -embedded`. In that mode the server
+listens on `127.0.0.1:53478`, prints its URL for the app and quits when
+the app ends, even if the app is killed. Print jobs saved as PDF or text
+open a Save panel. Building it needs the Xcode command line tools
+(`swiftc`).
+
+```sh
+open bin/IBM3477.app               # start it; or double-click it
+cp -R bin/IBM3477.app ~/Applications/     # install, for Dock/Spotlight
 ```
 
 On a server open to the internet, start `webibm3477` with `-lock`.

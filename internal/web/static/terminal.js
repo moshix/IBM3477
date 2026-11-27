@@ -283,13 +283,19 @@ setInterval(() => {
   if (lastScreen) drawScreen(lastScreen.rows, lastScreen.cols, lastScreen.cells);
 }, 500);
 
-// fitCanvas shows the terminal with the proportions of its real screen:
-// the InfoWindow has a 4:3 CRT, whatever its raster (80 or 132 columns,
-// 24/27/43 rows), so the canvas is drawn into the largest 4:3 box that
-// fits below the toolbar, growing and shrinking with the window. Pixels
+// fitCanvas shows the terminal as its real screen: a 12-inch CRT with a
+// 4:3 face (9.6 x 7.2 inches), drawn as the black #crt box, the largest
+// 4:3 box that fits below the toolbar, growing and shrinking with the
+// window. Like on the real tube, the picture does not reach the edge of
+// the glass: a dead zone of CRT_DEAD_IN inches stays black on every side,
+// and whatever raster the terminal puts out (80 or 132 columns, 24/27/43
+// rows) is stretched to fill the 8.8 x 6.4 inches inside it. Pixels
 // become non-square, as they were on the CRT.
 const SCREEN_ASPECT = 4 / 3;
+const CRT_W_IN = 9.6, CRT_H_IN = 7.2; // 12" diagonal at 4:3
+const CRT_DEAD_IN = 0.4;              // black border around the picture
 const wrap = document.getElementById('screen-wrap');
+const crt = document.getElementById('crt');
 function fitCanvas() {
   const pad = 16;
   // measure the space left between toolbar and status bar, not the
@@ -298,12 +304,19 @@ function fitCanvas() {
   const statusH = document.getElementById('statusbar').offsetHeight;
   const w = Math.max(0, wrap.clientWidth - pad);
   const h = Math.max(0, Math.min(wrap.clientHeight, window.innerHeight - toolbarH - statusH) - pad);
-  // the zoom scales the whole 4:3 box, so the aspect ratio (and with it
+  // the zoom scales the whole 4:3 tube, so the aspect ratio (and with it
   // the shape of the characters) stays the same at every zoom level
   const boxW = Math.min(w, h * SCREEN_ASPECT) * zoom;
-  canvas.style.width = Math.floor(boxW) + 'px';
-  canvas.style.height = Math.floor(boxW / SCREEN_ASPECT) + 'px';
+  const boxH = boxW / SCREEN_ASPECT;
+  crt.style.width = Math.floor(boxW) + 'px';
+  crt.style.height = Math.floor(boxH) + 'px';
+  // the picture: the tube minus the dead zone, in the tube's own inches
+  canvas.style.width = Math.floor(boxW * (CRT_W_IN - 2 * CRT_DEAD_IN) / CRT_W_IN) + 'px';
+  canvas.style.height = Math.floor(boxH * (CRT_H_IN - 2 * CRT_DEAD_IN) / CRT_H_IN) + 'px';
 }
+// a click on the dead zone gives the keyboard to the terminal, like a
+// click on the picture
+crt.addEventListener('mousedown', (ev) => { if (ev.target === crt) { ev.preventDefault(); canvas.focus(); } });
 window.addEventListener('resize', fitCanvas);
 
 // Zoom: a factor on the window-filling size (100%). Below 100% the screen

@@ -590,7 +590,9 @@ func TestPrintDialogQueuesJobs(t *testing.T) {
 
 // TestZoom: the zoom buttons scale the screen in 10% steps between 50%
 // and 200% of the window-filling size, always at 4:3, and the zoom is
-// remembered. The fake DOM's screen area fits a 912x684 box at 100%.
+// remembered. The fake DOM's screen area fits a 912x684 tube at 100%;
+// the picture inside it is the 12" tube minus its 0.4" dead zone, 8.8 of
+// 9.6 inches wide and 6.4 of 7.2 high.
 func TestZoom(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node not installed")
@@ -601,10 +603,10 @@ func TestZoom(t *testing.T) {
 		t.Fatalf("%v: %s", err, out)
 	}
 	for _, want := range []string{
-		`ZOOM load {"w":"456px","h":"342px","label":"50%"}`,   // restored
-		`ZOOM in {"w":"547px","h":"410px","label":"60%"}`,     // one step up
-		`ZOOM min {"w":"456px","h":"342px","label":"50%"}`,    // clamped at 50%
-		`ZOOM reset {"w":"912px","h":"684px","label":"100%"}`, // back to fit
+		`ZOOM load {"crt":"456pxx342px","w":"418px","h":"304px","label":"50%"}`,   // restored
+		`ZOOM in {"crt":"547pxx410px","w":"501px","h":"364px","label":"60%"}`,     // one step up
+		`ZOOM min {"crt":"456pxx342px","w":"418px","h":"304px","label":"50%"}`,    // clamped at 50%
+		`ZOOM reset {"crt":"912pxx684px","w":"836px","h":"608px","label":"100%"}`, // back to fit
 		`ZOOM saved 1`,
 	} {
 		if !strings.Contains(string(out), want) {
@@ -612,7 +614,7 @@ func TestZoom(t *testing.T) {
 		}
 	}
 	html, _ := staticFiles.ReadFile("static/index.html")
-	for _, id := range []string{"btn-zoom-in", "btn-zoom-out", "btn-zoom-reset"} {
+	for _, id := range []string{"btn-zoom-in", "btn-zoom-out", "btn-zoom-reset", "crt"} {
 		if !strings.Contains(string(html), `id="`+id+`"`) {
 			t.Errorf("index.html lacks button %s", id)
 		}

@@ -271,8 +271,8 @@ installs for your user only, no root needed: the programs go to
 "IBM 3477" entry to the app menu.
 
 ```sh
-tar xzf ibm3477-linux-0.9.5-amd64.tar.gz
-cd ibm3477-linux-0.9.5-amd64
+tar xzf ibm3477-linux-0.9.6-amd64.tar.gz
+cd ibm3477-linux-0.9.6-amd64
 ./install.sh              # ./install.sh --uninstall removes it again
 ibm3477                   # or start "IBM 3477" from the app menu
 ```
@@ -294,13 +294,13 @@ screenshot, and checks that the window size is remembered and that
 quitting or killing the app stops the emulator:
 
 ```sh
-tools/test-linux-app.bash bin/ibm3477-linux-0.9.5-arm64.tar.gz shot.png
+tools/test-linux-app.bash bin/ibm3477-linux-0.9.6-arm64.tar.gz shot.png
 ```
 
 ## Releasing
 
 `./release.bash` publishes everything in `bin/` as a GitHub release of
-this repository, tagged with the version (for example `0.9.5`), at the
+this repository, tagged with the version (for example `0.9.6`), at the
 current commit. App bundles are packed as
 `IBM3477-<version>-macos-universal.zip`; all other files are uploaded as
 they are. It first checks that `bin/` was built from this version, that

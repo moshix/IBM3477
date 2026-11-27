@@ -43,12 +43,18 @@ body {
 #zoom-controls #btn-zoom-reset { min-width: 48px; }
 #zoom-controls button:hover { background: #4ec9b0; color: #1a1a1a; }
 #toolbar, #statusbar { flex-shrink: 0; }
-/* The canvas keeps the terminal's native pixels; terminal.js sets its
-   CSS size to the largest that fits #screen-wrap (aspect ratio kept),
-   times the zoom. margin: auto centres it like flex centring would, but
-   when zoomed above 100% it overflows to the right and bottom only, so
-   scrolling reaches every edge (flex centring would cut off the left
-   and top). */
+/* #crt is the 12-inch 4:3 tube face: terminal.js sets its CSS size to
+   the largest 4:3 box that fits #screen-wrap, times the zoom. margin:
+   auto centres it like flex centring would, but when zoomed above 100%
+   it overflows to the right and bottom only, so scrolling reaches every
+   edge (flex centring would cut off the left and top). The slightly
+   rounded corners and the faint rim show the edge of the glass. */
+#crt {
+  background: #000; display: flex; margin: auto; flex-shrink: 0;
+  border-radius: 2.5% / 3.3%; box-shadow: 0 0 0 1px #2a2a2a;
+}
+/* The canvas keeps the terminal's native pixels, stretched to the
+   picture area inside the tube's dead zone, centred in it. */
 #screen {
   image-rendering: pixelated;
   background: #000; outline: none;

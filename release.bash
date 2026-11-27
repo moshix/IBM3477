@@ -1,6 +1,6 @@
 #!/bin/bash
 # Publish everything in bin/ (from ./build.bash) as a GitHub release of
-# this repository, tagged with the version (e.g. 0.9.5, as earlier
+# this repository, tagged with the version (e.g. 0.9.6, as earlier
 # releases), at the current commit.
 #
 # usage: ./release.bash [-n] [-y] [-t TITLE] [-F NOTES-FILE]

@@ -39,9 +39,10 @@ try {
     model: v('model-select'), color: v('color-select'), codepage: v('codepage-select'),
     muteClick: els['mute-click'] ? els['mute-click'].checked : undefined,
     clickStyle: v('click-style') }));
-  // canvas CSS size and zoom label as loaded, then after zoom in / out
-  const zoomState = () => JSON.stringify({ w: els.screen.style.width, h: els.screen.style.height,
-    label: els['btn-zoom-reset'].textContent });
+  // tube (#crt) and picture (canvas) CSS sizes and the zoom label as
+  // loaded, then after zoom in / out
+  const zoomState = () => JSON.stringify({ crt: els.crt.style.width + 'x' + els.crt.style.height,
+    w: els.screen.style.width, h: els.screen.style.height, label: els['btn-zoom-reset'].textContent });
   console.log('ZOOM load ' + zoomState());
   els['btn-zoom-in'].onclick(); console.log('ZOOM in ' + zoomState());
   for (let i = 0; i < 30; i++) els['btn-zoom-out'].onclick();

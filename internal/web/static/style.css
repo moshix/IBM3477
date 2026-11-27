@@ -59,9 +59,10 @@ body {
 #version-label {
   margin-left: auto; color: #666; font: 9px monospace;
 }
-/* In the native macOS app (macos/IBM3477, which adds class native-app
-   to <html>) there is no browser chrome, so the toolbar is back at the
-   page's full 13px, with padding and gaps scaled by the same 1.3. */
+/* In the native apps (macos/IBM3477 and linux/ibm3477-gtk, which add
+   class native-app to <html>) there is no browser chrome, so the toolbar
+   is back at the page's full 13px, with padding and gaps scaled by the
+   same 1.3. */
 html.native-app #toolbar { font-size: 13px; gap: 8px; padding: 5px 12px; }
 html.native-app #toolbar input, html.native-app #toolbar select,
 html.native-app #toolbar button { padding: 3px 8px; }
@@ -71,6 +72,17 @@ html.native-app #toolbar #btn-settings { padding: 1px 6px; }
 html.native-app #toolbar #btn-settings svg { width: 23px; height: 23px; }
 html.native-app .sep { height: 20px; margin: 0 4px; }
 html.native-app #version-label { font-size: 9px; }
+/* The Linux app (linux/ibm3477-gtk, class gtk-app): WebKitGTK draws a
+   <select> with the GTK theme's light background but this page's light
+   text, so it is unreadable. There, selects are drawn by CSS alone: our
+   colours, and a small light arrow (inline SVG) at the right. The id
+   selectors are listed so this wins over the #toolbar/#…-modal rules. */
+html.gtk-app select, html.gtk-app #toolbar select,
+html.gtk-app #keymap-modal .settings-row select, html.gtk-app #print-modal select {
+  -webkit-appearance: none; appearance: none; padding-right: 20px;
+  background: #333 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0h8L4 5z' fill='%23ccc'/%3E%3C/svg%3E") no-repeat right 7px center;
+  color: #eee;
+}
 #statusbar {
   display: flex; justify-content: space-between; align-items: center;
   padding: 3px 12px;
@@ -80,6 +92,12 @@ html.native-app #version-label { font-size: 9px; }
 /* Power switch: green when the terminal is off (press to switch on),
    red when it is running (press to switch off). */
 #toolbar #btn-power { font-weight: bold; padding: 2px 9px; }
+/* the power symbol (inline SVG): a stroked line and arc in the text
+   colour, one character high */
+.power-icon {
+  width: 1em; height: 1em; vertical-align: -0.15em;
+  fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round;
+}
 #toolbar #btn-power.power-off { background: #1d6b2e; border-color: #3c3; color: #fff; }
 #toolbar #btn-power.power-off:hover { background: #24863a; }
 #toolbar #btn-power.power-on { background: #6b1d1d; border-color: #c33; color: #fff; }

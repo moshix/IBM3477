@@ -5,7 +5,10 @@
 #   Linux arm64
 # Output: bin/<app>-<version>-<target>, plus bin/<app> (the macOS
 # universal binary, for running on this Mac), and "bin/IBM3477.app", the
-# native macOS app (tools/make-macos-app.bash) with bin/appwebibm3477 in it.
+# native macOS app (tools/make-macos-app.bash) with bin/appwebibm3477 in it,
+# and the native Linux apps bin/ibm3477-linux-<version>-<arch>.tar.gz
+# (tools/make-linux-app.bash; GTK + WebKitGTK, compiled in a Docker
+# container, skipped with a note when Docker is not running).
 #
 # The IBM 3477 ROMs are embedded: they are copied from this directory into
 # internal/roms/files/ (gitignored) and picked up by go:embed. The partial
@@ -58,6 +61,17 @@ done
 echo "  IBM3477.app: macOS app"
 tools/make-macos-app.bash IBM_3477.jpg bin bin/appwebibm3477 >/dev/null
 
+linux_apps=0
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  for arch in amd64 arm64; do
+    echo "  ibm3477 Linux app: linux/$arch"
+    tools/make-linux-app.bash "$arch" "bin/appwebibm3477-$VERSION-linux-$arch" bin >/dev/null
+  done
+  linux_apps=1
+else
+  echo "  ibm3477 Linux app: SKIPPED (Docker is not running; start it, e.g. colima start)"
+fi
+
 echo ""
 echo "Done:"
 for app in $APPS; do
@@ -67,3 +81,8 @@ for app in $APPS; do
   done
 done
 printf '  %-44s %s\n' "bin/IBM3477.app" "native macOS app (Cocoa), $VERSION"
+if [ $linux_apps = 1 ]; then
+  for arch in amd64 arm64; do
+    printf '  %-44s %s\n' "bin/ibm3477-linux-$VERSION-$arch.tar.gz" "native Linux app (GTK, WebKitGTK)"
+  done
+fi

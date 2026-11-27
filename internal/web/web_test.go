@@ -680,3 +680,23 @@ func TestSelectionMarksOnlyText(t *testing.T) {
 		t.Errorf("selection highlight wrong, want %s in:\n%s", want, out)
 	}
 }
+
+// TestPowerIconIsSVG: the power button draws its symbol as inline SVG.
+// The character U+23FB has no glyph in many systems' fonts (it showed as
+// a box in the Linux app), so it must not come back.
+func TestPowerIconIsSVG(t *testing.T) {
+	html, _ := staticFiles.ReadFile("static/index.html")
+	js, _ := staticFiles.ReadFile("static/terminal.js")
+	css, _ := staticFiles.ReadFile("static/style.css")
+	for name, b := range map[string][]byte{"index.html": html, "terminal.js": js} {
+		if strings.Contains(string(b), "&#x23FB;") || strings.Contains(string(b), "⏻") {
+			t.Errorf("%s still uses the U+23FB character", name)
+		}
+		if !strings.Contains(string(b), `class="power-icon"`) {
+			t.Errorf("%s lacks the SVG power icon", name)
+		}
+	}
+	if !strings.Contains(string(css), ".power-icon {") {
+		t.Error("style.css lacks the .power-icon rule")
+	}
+}

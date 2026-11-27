@@ -1,10 +1,11 @@
-# IBM InfoWindow twinax terminal (3477 / 3486) in the browser or as a macOS app
+# IBM InfoWindow twinax terminal (3477 / 3486) in the browser or as a macOS or Linux app
 
 This project keeps the IBM 3477 and IBM 3486 InfoWindow 5250 display
 stations alive as a web app. It runs the terminals' **original firmware
 unmodified** in a Go 8088 emulator and shows the result in a browser,
-or, on a Mac, in a **native macOS app** of its own that needs no browser
-(see [Native macOS app](#native-macos-app)).
+or in a **native app** of its own that needs no browser, on macOS and
+Linux (see [Native macOS app](#native-macos-app) and
+[Native Linux app](#native-linux-app)).
 The twinax cable to the AS/400 is replaced by **TN5250 over TCP/IP**:
 you enter a host name or IP address and a port, like in
 [web5250](../web5250).
@@ -131,7 +132,8 @@ opcodes, and every path ends properly; guessed entries are labelled
 The script embeds the ROMs, runs `go vet` and the tests, then builds into
 `bin/` (`bin/<name>-<version>-<target>`). It also copies the macOS
 universal binaries to `bin/webibm3477` and `bin/appwebibm3477`, and
-builds the native macOS app `bin/IBM3477.app`.
+builds the native macOS app `bin/IBM3477.app` and the native Linux apps
+`bin/ibm3477-linux-<version>-<arch>.tar.gz` (amd64 and arm64).
 The programs are:
 
 | Binary | Purpose |
@@ -139,6 +141,7 @@ The programs are:
 | `bin/webibm3477` | Multi-user server. Every browser tab gets its own emulated terminal. |
 | `bin/appwebibm3477` | Desktop app. Serves only this computer (`127.0.0.1:53477`), opens the browser by itself, returns to the shell at once (it runs on in the background, logging to the user cache directory), and quits about 30 seconds after the last tab closes; `-foreground` keeps it in the shell. The URL carries a per-run secret, so other web pages cannot use the terminal. |
 | `bin/IBM3477.app` | Native macOS app: the terminal in its own window, with Dock icon and menus, and no browser at all. See [Native macOS app](#native-macos-app). |
+| `bin/ibm3477-linux-<version>-<arch>.tar.gz` | Native Linux app (GTK and WebKitGTK), the same without a browser on Linux. See [Native Linux app](#native-linux-app). |
 
 ```sh
 ./bin/webibm3477 -listen :8050 -romdir . -host pub400.com -port 23
@@ -240,6 +243,76 @@ The app starts the copy of `appwebibm3477` in its bundle as
   browser;
 - quits as soon as the app ends: the app holds the server's standard
   input, which closes when the app quits, crashes or is killed.
+
+### Native Linux app
+
+The Linux twin of the macOS app: the terminal in its own GTK window, with
+an entry in the desktop's app menu, and **no browser needed**. The window
+is a WebKitGTK web view (`linux/ibm3477-gtk/main.c`); everything else
+works as described for the macOS app above: the bundled `appwebibm3477
+-embedded` on `127.0.0.1:53478`, quitting the app stops the emulator
+(even when the app is killed), print jobs are saved through a Save
+dialog, links to other sites open in the default browser, and the app
+remembers its own settings and its window size
+(`~/.config/ibm3477/window.ini`).
+
+It runs on amd64 and arm64 Linux with glibc 2.35 or newer (Ubuntu 22.04,
+Debian 12, Fedora 36 and later) and needs the WebKitGTK 4.1 library,
+which most GNOME desktops already have:
+
+```sh
+sudo apt install libwebkit2gtk-4.1-0     # Debian, Ubuntu
+sudo dnf install webkit2gtk4.1           # Fedora
+```
+
+To install, unpack the tarball for your machine and run `install.sh`. It
+installs for your user only, no root needed: the programs go to
+`~/.local/lib/ibm3477`, a link `ibm3477` to `~/.local/bin`, and an
+"IBM 3477" entry to the app menu.
+
+```sh
+tar xzf ibm3477-linux-0.9.5-amd64.tar.gz
+cd ibm3477-linux-0.9.5-amd64
+./install.sh              # ./install.sh --uninstall removes it again
+ibm3477                   # or start "IBM 3477" from the app menu
+```
+
+`./ibm3477` also runs straight from the unpacked folder, without
+installing.
+
+**Building:** C code using GTK cannot be cross-compiled from macOS like
+the Go programs, so `./build.bash` compiles it in a Linux container: it
+needs Docker running (on a Mac, for example `colima start`). Without
+Docker the build skips the Linux apps and says so. The first build makes
+a build image per architecture, which takes a few minutes; amd64 runs
+emulated on Apple Silicon, so it is the slower one.
+
+**Testing:** `tools/test-linux-app.bash` runs a tarball in a container on
+a virtual display. It installs the app, starts it, powers the terminal
+on and connects to pub400.com:23 (or a host and port you give), saves a
+screenshot, and checks that the window size is remembered and that
+quitting or killing the app stops the emulator:
+
+```sh
+tools/test-linux-app.bash bin/ibm3477-linux-0.9.5-arm64.tar.gz shot.png
+```
+
+## Releasing
+
+`./release.bash` publishes everything in `bin/` as a GitHub release of
+this repository, tagged with the version (for example `0.9.5`), at the
+current commit. App bundles are packed as
+`IBM3477-<version>-macos-universal.zip`; all other files are uploaded as
+they are. It first checks that `bin/` was built from this version, that
+everything is committed and pushed, and that the release does not exist
+yet, lists the files, and asks before publishing. It needs the GitHub CLI
+(`gh`), logged in.
+
+```sh
+./build.bash
+./release.bash -n                    # dry run: check and list only
+./release.bash -t "Native Linux app" # publish, with a title
+```
 
 ## Documentation
 

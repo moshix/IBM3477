@@ -4,6 +4,10 @@
 // in the emulated firmware on the server.
 'use strict';
 
+// The power symbol as inline SVG (the same as in index.html), not the
+// character U+23FB: many systems have no font with it and show a box.
+const POWER_ICON = '<svg class="power-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v6M4.6 3.8a6 6 0 1 0 6.8 0"/></svg>';
+
 const GLYPH_W = 16;    // font RAM glyphs are up to 16 dots wide
 const FONT_ROWS = 32;  // font RAM holds up to 32 pixel rows per glyph
 const FONT_RIGHT = 0x2000; // right glyph halves start 8K after the left
@@ -400,7 +404,7 @@ function setPowered(on) {
   if (!on) toneOff();
   // SETUP (status bar) is only offered while the terminal is on
   document.getElementById('setup-link').style.display = on ? '' : 'none';
-  powerBtn.innerHTML = on ? '&#x23FB; Power off' : '&#x23FB; Power on';
+  powerBtn.innerHTML = POWER_ICON + (on ? ' Power off' : ' Power on');
   powerBtn.className = on ? 'power-on' : 'power-off';
   if (!on) {
     lastScreen = null; // stop blink redraws of the old screen

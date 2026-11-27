@@ -183,8 +183,8 @@ finishes POST and starts its run-time driver.
 
 ### Native macOS app
 
-![The IBM 3477 terminal in the native macOS app: its own window with the
-toolbar, the terminal screen and the status bar, no browser](IBM3477_macos_app.png)
+![The native macOS app connected to pub400.com, showing the IBM i
+sign-on screen in its own window, no browser](IBM3477_macos_app.png)
 
 On a Mac, `bin/IBM3477.app` is the easiest way to use the terminal. It
 is a normal Cocoa application: the terminal opens in its own window,

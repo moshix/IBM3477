@@ -1,8 +1,10 @@
-# IBM InfoWindow twinax terminal (3477 / 3486) in the browser
+# IBM InfoWindow twinax terminal (3477 / 3486) in the browser or as a macOS app
 
 This project keeps the IBM 3477 and IBM 3486 InfoWindow 5250 display
 stations alive as a web app. It runs the terminals' **original firmware
-unmodified** in a Go 8088 emulator and shows the result in a browser.
+unmodified** in a Go 8088 emulator and shows the result in a browser,
+or, on a Mac, in a **native macOS app** of its own that needs no browser
+(see [Native macOS app](#native-macos-app)).
 The twinax cable to the AS/400 is replaced by **TN5250 over TCP/IP**:
 you enter a host name or IP address and a port, like in
 [web5250](../web5250).
@@ -129,35 +131,19 @@ opcodes, and every path ends properly; guessed entries are labelled
 The script embeds the ROMs, runs `go vet` and the tests, then builds into
 `bin/` (`bin/<name>-<version>-<target>`). It also copies the macOS
 universal binaries to `bin/webibm3477` and `bin/appwebibm3477`, and
-builds the native macOS app `bin/IBM3477.app` (see below).
-The two programs are:
+builds the native macOS app `bin/IBM3477.app`.
+The programs are:
 
 | Binary | Purpose |
 |---|---|
 | `bin/webibm3477` | Multi-user server. Every browser tab gets its own emulated terminal. |
 | `bin/appwebibm3477` | Desktop app. Serves only this computer (`127.0.0.1:53477`), opens the browser by itself, returns to the shell at once (it runs on in the background, logging to the user cache directory), and quits about 30 seconds after the last tab closes; `-foreground` keeps it in the shell. The URL carries a per-run secret, so other web pages cannot use the terminal. |
+| `bin/IBM3477.app` | Native macOS app: the terminal in its own window, with Dock icon and menus, and no browser at all. See [Native macOS app](#native-macos-app). |
 
 ```sh
 ./bin/webibm3477 -listen :8050 -romdir . -host pub400.com -port 23
 ./bin/appwebibm3477                 # finds the ROMs in . or next to the binary
 ./bin/appwebibm3477 -no-browser     # just print the URL (e.g. over ssh -L)
-```
-
-### Native macOS app
-
-`./build.bash` also builds `bin/IBM3477.app` (through
-`tools/make-macos-app.bash`), a normal Cocoa app with its own window, Dock icon and menus, and no
-browser tab. The window is a WKWebView
-(`macos/IBM3477/main.swift`). It starts the copy of `appwebibm3477`
-inside the bundle as `appwebibm3477 -embedded`. In that mode the server
-listens on `127.0.0.1:53478`, prints its URL for the app and quits when
-the app ends, even if the app is killed. Print jobs saved as PDF or text
-open a Save panel. Building it needs the Xcode command line tools
-(`swiftc`).
-
-```sh
-open bin/IBM3477.app               # start it; or double-click it
-cp -R bin/IBM3477.app ~/Applications/     # install, for Dock/Spotlight
 ```
 
 On a server open to the internet, start `webibm3477` with `-lock`.
@@ -195,6 +181,66 @@ opens the TN5250 session and attaches the emulated workstation
 controller, but the terminal answers on twinax only once its firmware
 finishes POST and starts its run-time driver.
 
+### Native macOS app
+
+![The IBM 3477 terminal in the native macOS app: its own window with the
+toolbar, the terminal screen and the status bar, no browser](IBM3477_macos_app.png)
+
+On a Mac, `bin/IBM3477.app` is the easiest way to use the terminal. It
+is a normal Cocoa application: the terminal opens in its own window,
+with its own Dock icon and menu bar, and **no browser is needed**. It
+runs on macOS 12 or later, on Intel and Apple Silicon (one universal
+app). The app is self-contained: the emulator with its ROMs is inside
+the bundle, so it can be copied to another Mac as it is.
+
+`./build.bash` builds it together with everything else (through
+`tools/make-macos-app.bash`; this needs `swiftc` from the Xcode command
+line tools). To start it, double-click `bin/IBM3477.app` in Finder, or:
+
+```sh
+open bin/IBM3477.app
+```
+
+To find it in Spotlight and Launchpad, copy it to your Applications
+folder; to keep it in the Dock, start it, right-click its Dock icon and
+choose Options › Keep in Dock:
+
+```sh
+cp -R bin/IBM3477.app ~/Applications/
+```
+
+The app is signed ad hoc only, not notarized by Apple. On another Mac,
+the first start may be refused: right-click the app, choose Open and
+confirm (on newer macOS versions, allow it in System Settings › Privacy
+& Security).
+
+Compared with the browser:
+- **Quitting:** ⌘Q or closing the window quits the app and the emulator
+  with it. There is no background server to wait for.
+- **Toolbar:** at full size (13 px), since the window has no browser bar
+  and tabs above it.
+- **Settings:** the app keeps its own settings (host, port, model, size,
+  colours, sound, keyboard mapping), apart from any browser's. It also
+  remembers the window's size and position.
+- **Printing:** Save as PDF / text opens the macOS Save panel. Open PDF
+  to print, which needs a browser tab, saves the PDF instead. Print on
+  works as in the browser.
+- **Menus:** Edit (copy and paste, see
+  [Mouse, copy and paste](#mouse-copy-and-paste)), View › Reload Page and
+  Enter Full Screen, and the usual Window menu.
+- **Errors:** if the emulator cannot start, a dialog says why.
+
+How it works: the window is a WKWebView, the macOS system web view
+(`macos/IBM3477/main.swift`). It shows the same page as the browser.
+The app starts the copy of `appwebibm3477` in its bundle as
+`appwebibm3477 -embedded`. In that mode the server:
+- serves only this computer, on `127.0.0.1:53478`, so it can run next
+  to a browser-mode `appwebibm3477` on 53477;
+- prints its URL (with the per-run secret) for the app, and opens no
+  browser;
+- quits as soon as the app ends: the app holds the server's standard
+  input, which closes when the app quits, crashes or is killed.
+
 ## Documentation
 
 - [MEMORY.md](MEMORY.md): every known RAM, ROM and hardware address and
@@ -230,7 +276,7 @@ volumes are the terminal's Setup choices; the pitch (1 kHz) is a guess.
   just a third of the key presses in the video, and the room's background
   tones, were filtered out.
 
-The browser remembers the last host and port, the terminal model and
+The browser (or the macOS app) remembers the last host and port, the terminal model and
 size, the codepage, the text colour, the sound switch, the click mute
 and the keyboard mapping (`localStorage`), so they are back after a
 browser restart.
@@ -282,6 +328,9 @@ The page then shows the print job:
   Linux). `webibm3477 -lock` does not offer the server's printers.
 - **Open PDF to print:** a new tab with the PDF and the browser's own
   print dialog.
+
+In the [native macOS app](#native-macos-app), saving always opens the
+macOS Save panel, and Open PDF to print saves the PDF instead.
 
 Settings › Print jobs (or "Do this every time") makes one of these
 automatic. The Setup Printer choices (lines and characters per inch,
